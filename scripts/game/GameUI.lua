@@ -52,6 +52,19 @@ local lastOrbit_ = -1
 -- ——— 按钮脉冲 ———
 local btnPulse_ = 0
 
+-- ——— 暂停系统 ———
+local paused_ = false
+local pauseAnim_ = {
+    maskAlpha  = 0,
+    panelScale = 0,
+    panelAlpha = 0,
+    titleAlpha = 0,
+    btnAlpha   = 0,
+}
+local pauseBtnRect_ = { x = 0, y = 0, w = 0, h = 0 }  -- 暂停按钮点击区域
+local resumeBtnRect_ = { x = 0, y = 0, w = 0, h = 0 }
+local menuBtnRect_ = { x = 0, y = 0, w = 0, h = 0 }
+
 function M.init(_vg, _W, _H)
     vg_ = _vg
     W_  = _W
@@ -165,6 +178,64 @@ function M.pulseHUD(field)
     end
 end
 
+-- ══════════════════════════════════════════════════════════════
+-- 暂停系统
+-- ══════════════════════════════════════════════════════════════
+function M.isPaused()
+    return paused_
+end
+
+function M.showPause()
+    if paused_ then return end
+    paused_ = true
+
+    Tween.cancelTarget(pauseAnim_)
+    pauseAnim_.maskAlpha  = 0
+    pauseAnim_.panelScale = 0
+    pauseAnim_.panelAlpha = 0
+    pauseAnim_.titleAlpha = 0
+    pauseAnim_.btnAlpha   = 0
+
+    Tween.to(pauseAnim_, { maskAlpha = 1 }, 0.30, {
+        easing = Tween.Easing.easeOutCubic, delay = 0.0
+    })
+    Tween.to(pauseAnim_, { panelScale = 1, panelAlpha = 1 }, 0.40, {
+        easing = Tween.Easing.easeOutBack, delay = 0.05
+    })
+    Tween.to(pauseAnim_, { titleAlpha = 1 }, 0.30, {
+        easing = Tween.Easing.easeOutCubic, delay = 0.15
+    })
+    Tween.to(pauseAnim_, { btnAlpha = 1 }, 0.30, {
+        easing = Tween.Easing.easeOutCubic, delay = 0.25
+    })
+end
+
+function M.hidePause()
+    if not paused_ then return end
+    paused_ = false
+
+    Tween.cancelTarget(pauseAnim_)
+    Tween.to(pauseAnim_, { maskAlpha = 0, panelScale = 0.9, panelAlpha = 0, titleAlpha = 0, btnAlpha = 0 }, 0.25, {
+        easing = Tween.Easing.easeOutCubic
+    })
+end
+
+--- 暂停界面点击处理，返回 action 字符串或 nil
+function M.onPauseClick(x, y)
+    if not paused_ then return nil end
+    if Comp.hitTest(resumeBtnRect_, x, y) then
+        return "resume"
+    elseif Comp.hitTest(menuBtnRect_, x, y) then
+        return "menu"
+    end
+    return nil
+end
+
+--- 暂停按钮点击检测（仅 playing 状态用）
+function M.hitPauseButton(x, y)
+    return Comp.hitTest(pauseBtnRect_, x, y)
+end
+
 -- ——— 主绘制入口 ———
 function M.draw(vg, state)
     vg_ = vg
@@ -176,6 +247,10 @@ function M.draw(vg, state)
         local p = Player.getData()
         drawHUD(p)
         drawButtons(p)
+        drawPauseButton()
+        if paused_ then
+            drawPauseOverlay()
+        end
     elseif state == "upgrade" then
         local Player = require("game.Player")
         local p = Player.getData()
@@ -385,9 +460,9 @@ function drawHUD(p)
     })
     nvgRestore(vg_)
 
-    -- 轨道子弹计数（右上角胶囊，带弹跳缩放）
+    -- 轨道子弹计数（右上角胶囊，暂停按钮左侧，带弹跳缩放）
     if orbitCount > 0 then
-        local orbCx = W_ - 50
+        local orbCx = W_ - 50 - 36  -- 为暂停按钮留出空间
         local orbCy = 26
         nvgSave(vg_)
         nvgTranslate(vg_, orbCx, orbCy)
@@ -397,9 +472,9 @@ function drawHUD(p)
 
         nvgFontFace(vg_, Theme.font.family)
         nvgFontSize(vg_, Theme.font.small)
-        nvgTextAlign(vg_, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+        nvgTextAlign(vg_, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(vg_, nvgRGBAf(Theme.c(Theme.colors.titleText)))
-        nvgText(vg_, W_ - 20, 44, "ORBIT")
+        nvgText(vg_, orbCx, 44, "ORBIT")
         nvgRestore(vg_)
     end
 
@@ -471,6 +546,116 @@ function drawButtons(p)
         nvgStrokeColor(vg_, nvgRGBAf(1.0, 1.0, 1.0, 0.3))
         nvgStrokeWidth(vg_, 1.5)
         nvgStroke(vg_)
+    end
+end
+
+-- ══════════════════════════════════════════════════════════════
+-- 暂停按钮（右上角矢量图标）
+-- ══════════════════════════════════════════════════════════════
+function drawPauseButton()
+    local size = 32
+    local margin = 16
+    local bx = W_ - margin - size
+    local by = margin
+    pauseBtnRect_ = { x = bx, y = by, w = size, h = size }
+
+    local cx = bx + size * 0.5
+    local cy = by + size * 0.5
+    local r  = size * 0.5
+
+    -- hover 检测
+    local hov = Comp.isPointerInRect(bx, by, size, size)
+
+    -- 背景圆
+    nvgBeginPath(vg_)
+    nvgCircle(vg_, cx, cy, r)
+    nvgFillColor(vg_, nvgRGBAf(Theme.ca(Theme.colors.panelBgDark, hov and 0.9 or 0.7)))
+    nvgFill(vg_)
+
+    -- 描边
+    nvgBeginPath(vg_)
+    nvgCircle(vg_, cx, cy, r)
+    nvgStrokeColor(vg_, nvgRGBAf(Theme.ca(Theme.colors.panelBorder, hov and 1.0 or 0.6)))
+    nvgStrokeWidth(vg_, 1.5)
+    nvgStroke(vg_)
+
+    -- hover 高亮
+    if hov then
+        nvgBeginPath(vg_)
+        nvgCircle(vg_, cx, cy, r)
+        nvgFillColor(vg_, nvgRGBAf(1, 1, 1, 0.12))
+        nvgFill(vg_)
+    end
+
+    -- 暂停图标：两条竖线 ||
+    local barW = 3.0
+    local barH = r * 0.7
+    local gap  = 3.5
+    local iconColor = hov and Theme.colors.white or Theme.colors.lightText
+
+    nvgBeginPath(vg_)
+    nvgRoundedRect(vg_, cx - gap - barW, cy - barH * 0.5, barW, barH, 1.0)
+    nvgFillColor(vg_, nvgRGBAf(Theme.c(iconColor)))
+    nvgFill(vg_)
+
+    nvgBeginPath(vg_)
+    nvgRoundedRect(vg_, cx + gap, cy - barH * 0.5, barW, barH, 1.0)
+    nvgFillColor(vg_, nvgRGBAf(Theme.c(iconColor)))
+    nvgFill(vg_)
+end
+
+-- ══════════════════════════════════════════════════════════════
+-- 暂停弹窗
+-- ══════════════════════════════════════════════════════════════
+function drawPauseOverlay()
+    local pa = pauseAnim_
+    local cx = W_ * 0.5
+    local cy = H_ * 0.5
+
+    -- 遮罩
+    if pa.maskAlpha > 0.01 then
+        nvgBeginPath(vg_)
+        nvgRect(vg_, 0, 0, W_, H_)
+        local or_, og, ob = Theme.c(Theme.colors.overlay)
+        nvgFillColor(vg_, nvgRGBAf(or_, og, ob, Theme.colors.overlayAlpha * pa.maskAlpha))
+        nvgFill(vg_)
+    end
+
+    -- 面板
+    local pw, ph = 220, 170
+    local px, py = cx - pw * 0.5, cy - ph * 0.5
+
+    if pa.panelAlpha > 0.01 then
+        nvgSave(vg_)
+        nvgTranslate(vg_, cx, cy)
+        nvgScale(vg_, pa.panelScale, pa.panelScale)
+        nvgTranslate(vg_, -cx, -cy)
+        nvgGlobalAlpha(vg_, pa.panelAlpha)
+        Comp.drawPanel(vg_, px, py, pw, ph)
+        nvgGlobalAlpha(vg_, 1.0)
+        nvgRestore(vg_)
+    end
+
+    -- 标题
+    if pa.titleAlpha > 0.01 then
+        nvgGlobalAlpha(vg_, pa.titleAlpha)
+        Comp.drawTitle(vg_, cx, py + 40, "PAUSED", 24, Theme.colors.titleText)
+        nvgGlobalAlpha(vg_, 1.0)
+    end
+
+    -- 按钮
+    if pa.btnAlpha > 0.01 then
+        nvgGlobalAlpha(vg_, pa.btnAlpha)
+
+        -- 继续游戏按钮
+        local resumeResult = Comp.drawButton(vg_, cx, cy + 10, "RESUME", { variant = "primary", w = 160 })
+        resumeBtnRect_ = resumeResult
+
+        -- 回到菜单按钮
+        local menuResult = Comp.drawButton(vg_, cx, cy + 56, "MAIN MENU", { variant = "accent", w = 160 })
+        menuBtnRect_ = menuResult
+
+        nvgGlobalAlpha(vg_, 1.0)
     end
 end
 

@@ -168,42 +168,48 @@ function HandleUpdate(eventType, eventData)
         Input.endFrame()
 
     elseif state == "playing" then
-        Input.update(dt)
-        Player.update(dt)
+        -- 暂停时只更新 UI 动画（Tween 已在上方全局 update）
+        if UI.isPaused() then
+            UI.update(dt)
+            Input.endFrame()
+        else
+            Input.update(dt)
+            Player.update(dt)
 
-        -- 子弹时间：主观慢动作，敌人/子弹速度降至 20%
-        local isBT = Player.getData().bulletTimeActive
-        if isBT and not wasBulletTime then
-            VFX.triggerBTFlash()
+            -- 子弹时间：主观慢动作，敌人/子弹速度降至 20%
+            local isBT = Player.getData().bulletTimeActive
+            if isBT and not wasBulletTime then
+                VFX.triggerBTFlash()
+            end
+            wasBulletTime = isBT
+            local btScale = isBT and 0.2 or 1.0
+            local slowDt  = dt * btScale
+
+            EnemyMgr.update(slowDt)
+            BossMgr.update(slowDt)
+            BulletMgr.update(slowDt, dt)
+            ItemMgr.update(dt)
+            VFX.setContext(vg, W, H, gameTime)
+            VFX.updateAll(dt)
+
+            -- Boss 触发检测
+            BossMgr.checkSpawn(Player.getKillCount())
+
+            -- Boss 召唤小怪（转调 EnemyMgr）
+            local summonCount = BossMgr.getPendingSummon()
+            for _ = 1, summonCount do
+                EnemyMgr.forceSpawn()
+            end
+
+            -- 碰撞检测
+            checkCollisions(dt)
+
+            -- UI 动画更新
+            UI.update(dt)
+
+            -- 帧末重置输入 delta
+            Input.endFrame()
         end
-        wasBulletTime = isBT
-        local btScale = isBT and 0.2 or 1.0
-        local slowDt  = dt * btScale
-
-        EnemyMgr.update(slowDt)
-        BossMgr.update(slowDt)
-        BulletMgr.update(slowDt, dt)
-        ItemMgr.update(dt)
-        VFX.setContext(vg, W, H, gameTime)
-        VFX.updateAll(dt)
-
-        -- Boss 触发检测
-        BossMgr.checkSpawn(Player.getKillCount())
-
-        -- Boss 召唤小怪（转调 EnemyMgr）
-        local summonCount = BossMgr.getPendingSummon()
-        for _ = 1, summonCount do
-            EnemyMgr.forceSpawn()
-        end
-
-        -- 碰撞检测
-        checkCollisions(dt)
-
-        -- UI 动画更新
-        UI.update(dt)
-
-        -- 帧末重置输入 delta
-        Input.endFrame()
 
     elseif state == "upgrade" then
         UI.update(dt)
@@ -668,6 +674,14 @@ function HandleKeyDown(eventType, eventData)
             GameState.set("prelevel")
             PagePreLevel.show(highScore_)
         end
+    elseif state == "playing" then
+        if key == KEY_ESCAPE then
+            if UI.isPaused() then
+                UI.hidePause()
+            else
+                UI.showPause()
+            end
+        end
     elseif state == "prelevel" then
         if key == KEY_ESCAPE then
             GameState.set("menu")
@@ -728,6 +742,25 @@ function HandleMouseDown(eventType, eventData)
             PageBestiary.show()
         elseif action == "practice" then
             startPractice()
+        end
+
+    elseif state == "playing" then
+        -- 暂停弹窗优先
+        if UI.isPaused() then
+            local action = UI.onPauseClick(x, y)
+            if action == "resume" then
+                UI.hidePause()
+            elseif action == "menu" then
+                UI.hidePause()
+                GameState.set("menu")
+                UI.showMenu()
+            end
+            return
+        end
+        -- 暂停按钮
+        if UI.hitPauseButton(x, y) then
+            UI.showPause()
+            return
         end
 
     elseif state == "bestiary" then
@@ -801,6 +834,25 @@ function HandleTouchBegin(eventType, eventData)
             PageBestiary.show()
         elseif action == "practice" then
             startPractice()
+        end
+
+    elseif state == "playing" then
+        -- 暂停弹窗优先
+        if UI.isPaused() then
+            local action = UI.onPauseClick(x, y)
+            if action == "resume" then
+                UI.hidePause()
+            elseif action == "menu" then
+                UI.hidePause()
+                GameState.set("menu")
+                UI.showMenu()
+            end
+            return
+        end
+        -- 暂停按钮
+        if UI.hitPauseButton(x, y) then
+            UI.showPause()
+            return
         end
 
     elseif state == "bestiary" then

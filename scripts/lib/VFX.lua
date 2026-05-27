@@ -1404,21 +1404,29 @@ local aoePool_ = Pool.new(8)
 ---@param damage number 伤害值（仅用于 popup 显示）
 function M.spawnAOE(x, y, radius, damage)
     radius = radius or 60
-    -- 多边形碎片粒子
-    local fragCount = math.random(8, 12)
+    -- 余烬粒子（圆点，无多边形）
+    local fragCount = math.random(10, 15)
     local frags = {}
     for i = 1, fragCount do
-        local angle = (i - 1) / fragCount * math.pi * 2 + (math.random() - 0.5) * 0.4
-        local spd = 80 + math.random() * 120
-        local sz = 4 + math.random() * 6
+        local angle = (i - 1) / fragCount * math.pi * 2 + (math.random() - 0.5) * 0.5
+        local spd = 100 + math.random() * 150
         frags[i] = {
             x = 0, y = 0,
             vx = math.cos(angle) * spd,
             vy = math.sin(angle) * spd,
-            size = sz,
-            rot = math.random() * math.pi * 2,
-            rotSpd = (math.random() - 0.5) * 12,
-            sides = math.random(3, 5),  -- 三角/四边/五边形碎片
+            size = 2.5 + math.random() * 3.5,  -- 圆点半径
+        }
+    end
+    -- 放射爆裂线
+    local burstCount = math.random(8, 11)
+    local bursts = {}
+    for i = 1, burstCount do
+        local angle = (i - 1) / burstCount * math.pi * 2 + (math.random() - 0.5) * 0.3
+        bursts[i] = {
+            angle = angle,
+            len = 20 + math.random() * 25,   -- 线段长度
+            dist = 8 + math.random() * 6,    -- 初始离中心距离
+            spd = 180 + math.random() * 100, -- 向外扩散速度
         }
     end
     local e = aoePool_:get()
@@ -1426,10 +1434,11 @@ function M.spawnAOE(x, y, radius, damage)
     e.radius = radius
     e.damage = damage or 1
     e.age = 0
-    e.duration = 0.55
+    e.duration = 0.5
     e.frags = frags
+    e.bursts = bursts
     e.ringRadius = 0
-    e.polyAngleOff = math.random() * math.pi * 2  -- 多边形初始旋转
+    e.angleOff = math.random() * math.pi * 2  -- 虚线环旋转偏移
     aoeExplosions[#aoeExplosions + 1] = e
 end
 
@@ -1442,15 +1451,20 @@ local function updateAOEExplosions(dt)
             table.remove(aoeExplosions, i)
         else
             local t = e.age / e.duration
-            -- 多边形扩散环快速扩张
-            e.ringRadius = e.radius * easeOutQuad(math.min(1, t * 2.5))
-            -- 碎片运动
+            -- 冲击波环扩张
+            e.ringRadius = e.radius * easeOutQuad(math.min(1, t * 2.2))
+            -- 余烬运动（重力 + 阻力）
             for _, f in ipairs(e.frags) do
                 f.x = f.x + f.vx * dt
                 f.y = f.y + f.vy * dt
-                f.vy = f.vy + 200 * dt  -- 重力
-                f.rot = f.rot + f.rotSpd * dt
-                f.vx = f.vx * 0.96  -- 阻力
+                f.vy = f.vy + 260 * dt  -- 重力
+                f.vx = f.vx * 0.94
+                f.vy = f.vy * 0.97
+            end
+            -- 爆裂线向外扩张
+            for _, b in ipairs(e.bursts) do
+                b.dist = b.dist + b.spd * dt
+                b.spd = b.spd * 0.92  -- 快速减速
             end
         end
     end
@@ -1461,83 +1475,111 @@ function M.drawAOEExplosions()
         local t = e.age / e.duration
         local alpha = 1.0 - easeInQuad(t)
 
-        -- 1. 地面焦痕圆（持续显示，慢速淡出）
-        local scorchAlpha = math.max(0, 1.0 - t * 0.8)
-        nvgBeginPath(vg)
-        nvgCircle(vg, e.x, e.y, e.radius * 0.9)
-        nvgFillColor(vg, nvgRGBA(40, 20, 0, math.floor(scorchAlpha * 80)))
-        nvgFill(vg)
-
-        -- 2. 多边形扩散环（不规则八边形，模拟爆炸波）
-        if e.ringRadius > 2 then
-            local segments = 8
-            local ringAlpha = alpha * 0.9
-            nvgBeginPath(vg)
+        -- 1. 残留焦痕（虚线弧段环，慢淡出 — 与预警圈风格统一）
+        local scorchAlpha = math.max(0, 1.0 - t * 0.7)
+        if scorchAlpha > 0.02 then
+            local scorchR = e.radius * 0.85
+            local segments = 10
+            local arcPer = (math.pi * 2) / segments
+            local gapRatio = 0.3
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStrokeColor(vg, nvgRGBA(60, 30, 5, math.floor(scorchAlpha * 90)))
+            nvgStrokeWidth(vg, 2.5)
             for si = 0, segments - 1 do
-                local angle = e.polyAngleOff + si / segments * math.pi * 2
-                -- 不规则半径：每条边有微小偏差
-                local rVar = e.ringRadius * (0.85 + 0.15 * math.sin(angle * 3.7 + e.age * 8))
-                local px = e.x + math.cos(angle) * rVar
-                local py = e.y + math.sin(angle) * rVar
-                if si == 0 then nvgMoveTo(vg, px, py)
-                else            nvgLineTo(vg, px, py) end
+                local a0 = e.angleOff + si * arcPer
+                local a1 = a0 + arcPer * (1.0 - gapRatio)
+                nvgBeginPath(vg)
+                nvgArc(vg, e.x, e.y, scorchR, a0, a1, NVG_CW)
+                nvgStroke(vg)
             end
-            nvgClosePath(vg)
-            -- 填充：橙红渐变
-            nvgFillColor(vg, nvgRGBA(255, 120, 30, math.floor(ringAlpha * 60)))
-            nvgFill(vg)
-            -- 描边：亮橙
+        end
+
+        -- 2. 冲击波虚线环（向外扩张，虚线弧段 — 核心视觉）
+        if e.ringRadius > 4 then
+            local ringAlpha = alpha * 0.95
+            local segments = 10
+            local arcPer = (math.pi * 2) / segments
+            local gapRatio = 0.35
+            nvgLineCap(vg, NVG_ROUND)
             nvgStrokeColor(vg, nvgRGBA(255, 180, 50, math.floor(ringAlpha * 220)))
-            nvgStrokeWidth(vg, math.max(1.5, 4.0 * (1 - t)))
-            nvgStroke(vg)
+            nvgStrokeWidth(vg, math.max(1.5, 3.5 * (1 - t)))
+            for si = 0, segments - 1 do
+                local a0 = e.angleOff + si * arcPer + t * 0.8  -- 轻微旋转
+                local a1 = a0 + arcPer * (1.0 - gapRatio)
+                nvgBeginPath(vg)
+                nvgArc(vg, e.x, e.y, e.ringRadius, a0, a1, NVG_CW)
+                nvgStroke(vg)
+            end
         end
 
-        -- 3. 中心闪光（前 20% 时间）
-        if t < 0.2 then
-            local flashT = t / 0.2
-            local flashR = 12 + 20 * flashT
-            local flashA = 1.0 - flashT
+        -- 3. 放射爆裂线（从中心射出的短线段，星爆感）
+        if alpha > 0.05 then
+            local burstAlpha = alpha * 0.9
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStrokeColor(vg, nvgRGBA(255, 210, 80, math.floor(burstAlpha * 200)))
+            nvgStrokeWidth(vg, math.max(1.5, 3.0 * (1 - t * 0.7)))
+            for _, b in ipairs(e.bursts) do
+                local cos_a = math.cos(b.angle)
+                local sin_a = math.sin(b.angle)
+                local innerD = b.dist
+                local outerD = b.dist + b.len * math.max(0.2, 1.0 - t * 1.5)
+                nvgBeginPath(vg)
+                nvgMoveTo(vg, e.x + cos_a * innerD, e.y + sin_a * innerD)
+                nvgLineTo(vg, e.x + cos_a * outerD, e.y + sin_a * outerD)
+                nvgStroke(vg)
+            end
+        end
+
+        -- 4. 中心闪光（双层：白热核心 + 橙色光晕，前 30%）
+        if t < 0.3 then
+            local flashT = t / 0.3
+            local flashA = 1.0 - easeInQuad(flashT)
+            -- 外层橙色光晕
+            local haloR = 18 + 30 * flashT
+            local halo = nvgRadialGradient(vg, e.x, e.y, 0, haloR,
+                nvgRGBA(255, 140, 30, math.floor(flashA * 120)),
+                nvgRGBA(255, 80, 10, 0))
             nvgBeginPath(vg)
-            nvgCircle(vg, e.x, e.y, flashR)
-            nvgFillColor(vg, nvgRGBA(255, 240, 200, math.floor(flashA * 230)))
+            nvgCircle(vg, e.x, e.y, haloR)
+            nvgFillPaint(vg, halo)
+            nvgFill(vg)
+            -- 内层白热核心
+            local coreR = 8 + 10 * flashT
+            nvgBeginPath(vg)
+            nvgCircle(vg, e.x, e.y, coreR)
+            nvgFillColor(vg, nvgRGBA(255, 245, 220, math.floor(flashA * 240)))
             nvgFill(vg)
         end
 
-        -- 4. 碎片粒子
+        -- 5. 余烬粒子（双层圆点：外层辉光 + 内层亮核，无描边）
         for _, f in ipairs(e.frags) do
-            local fragAlpha = alpha * 0.85
-            if fragAlpha < 0.02 then goto skip_frag end
+            local fragAlpha = alpha * 0.9
+            if fragAlpha < 0.03 then goto skip_frag end
             local fx = e.x + f.x
             local fy = e.y + f.y
-            nvgSave(vg)
-            nvgTranslate(vg, fx, fy)
-            nvgRotate(vg, f.rot)
-            -- 绘制多边形碎片
-            local sz = f.size * (1.0 - t * 0.5)
+            local sz = f.size * math.max(0.3, 1.0 - t * 0.8)
+            -- 颜色从白热→亮橙→暗红
+            local cr = math.floor(lerp(255, 200, t))
+            local cg = math.floor(lerp(200, 50, t))
+            local cb = math.floor(lerp(80, 10, t))
+            -- 外层辉光（放大 2.2x，低透明度）
             nvgBeginPath(vg)
-            for si = 0, f.sides - 1 do
-                local a = si / f.sides * math.pi * 2
-                local px = math.cos(a) * sz
-                local py = math.sin(a) * sz
-                if si == 0 then nvgMoveTo(vg, px, py)
-                else            nvgLineTo(vg, px, py) end
-            end
-            nvgClosePath(vg)
-            -- 颜色：从亮橙到暗红
-            local fr = math.floor(lerp(255, 180, t))
-            local fg = math.floor(lerp(140, 40, t))
-            local fb = math.floor(lerp(30, 10, t))
-            nvgFillColor(vg, nvgRGBA(fr, fg, fb, math.floor(fragAlpha * 200)))
+            nvgCircle(vg, fx, fy, sz * 2.2)
+            nvgFillColor(vg, nvgRGBA(cr, cg, cb, math.floor(fragAlpha * 60)))
             nvgFill(vg)
-            nvgRestore(vg)
+            -- 内层亮核（实际大小，高透明度）
+            nvgBeginPath(vg)
+            nvgCircle(vg, fx, fy, sz)
+            nvgFillColor(vg, nvgRGBA(cr, cg, cb, math.floor(fragAlpha * 220)))
+            nvgFill(vg)
             ::skip_frag::
         end
 
-        -- 5. 外圈扩散辉光
+        -- 6. 外圈扩散辉光（径向渐变，柔和收尾）
         if alpha > 0.1 then
-            local glowR = e.ringRadius * 1.3
-            local glow = nvgRadialGradient(vg, e.x, e.y, e.ringRadius * 0.5, glowR,
-                nvgRGBA(255, 100, 20, math.floor(alpha * 40)),
+            local glowR = e.ringRadius * 1.2
+            local glow = nvgRadialGradient(vg, e.x, e.y, e.ringRadius * 0.3, glowR,
+                nvgRGBA(255, 100, 20, math.floor(alpha * 35)),
                 nvgRGBA(255, 60, 10, 0))
             nvgBeginPath(vg)
             nvgCircle(vg, e.x, e.y, glowR)

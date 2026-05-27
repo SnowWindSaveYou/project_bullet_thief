@@ -716,20 +716,34 @@ function drawBullet(vg, b)
         fr, fg, fb = 0.8, 0.5, 0.1
         local heightOffset = -(b.height or 0) * 0.5  -- 高度越高，实体越往上
         drawDiamond(vg, b.x, b.y + heightOffset, b.radius, fr, fg, fb)
-        -- 地面预警圆（落点阴影位置，越接近落地越大越不透明）
+        -- 地面预警圆（虚线段圆环 + 填充，越接近落地越大越不透明）
+        -- 预警圈固定在预计算落点位置，不跟随炮弹移动
         local landProgress = 1.0 - math.max(0, math.min(1, -(b.height or 0) / 80))
-        local warnAlpha = 0.2 + landProgress * 0.4
+        local warnAlpha = 0.2 + landProgress * 0.5
         local warnRadius = (b.aoeRadius or 60) * (0.3 + landProgress * 0.7)
+        -- 脉冲呼吸（接近落地时加速）
+        local pulseFreq = 6 + landProgress * 10
+        local pulse = 0.8 + 0.2 * math.sin(drawTime_ * pulseFreq)
+        local wcx, wcy = (b.landX or b.x) + ox, (b.landY or b.y) + oy
+        -- 1) 填充预警（半透明）
         nvgBeginPath(vg)
-        nvgCircle(vg, b.x + ox, b.y + oy, warnRadius)
-        nvgStrokeColor(vg, nvgRGBAf(0.9, 0.4, 0.1, warnAlpha))
-        nvgStrokeWidth(vg, 1.5)
-        nvgStroke(vg)
-        -- 地面填充预警（半透明）
-        nvgBeginPath(vg)
-        nvgCircle(vg, b.x + ox, b.y + oy, warnRadius)
-        nvgFillColor(vg, nvgRGBAf(0.9, 0.4, 0.1, warnAlpha * 0.2))
+        nvgCircle(vg, wcx, wcy, warnRadius)
+        nvgFillColor(vg, nvgRGBAf(0.9, 0.4, 0.1, warnAlpha * 0.15 * pulse))
         nvgFill(vg)
+        -- 2) 虚线段圆环（胶囊段，与激光/锁定风格统一）
+        local segments = 12
+        local arcPer = (math.pi * 2) / segments
+        local gapRatio = 0.35  -- 留 35% 做间隙
+        nvgLineCap(vg, NVG_ROUND)
+        nvgStrokeColor(vg, nvgRGBAf(0.9, 0.4, 0.1, warnAlpha * pulse))
+        nvgStrokeWidth(vg, 2.5)
+        for si = 0, segments - 1 do
+            local a0 = si * arcPer
+            local a1 = a0 + arcPer * (1.0 - gapRatio)
+            nvgBeginPath(vg)
+            nvgArc(vg, wcx, wcy, warnRadius, a0, a1, NVG_CW)
+            nvgStroke(vg)
+        end
         return
     elseif b.stealable then
         -- 可夺取：橙红
@@ -824,8 +838,9 @@ function drawDiamond(vg, cx, cy, r, fr, fg, fb)
     nvgClosePath(vg)
     nvgFillColor(vg, nvgRGBAf(fr, fg, fb, 1.0))
     nvgFill(vg)
+    nvgLineJoin(vg, NVG_ROUND)
     nvgStrokeColor(vg, nvgRGBAf(1.0, 0.7, 0.2, 0.6))
-    nvgStrokeWidth(vg, 1.2)
+    nvgStrokeWidth(vg, 1.5)
     nvgStroke(vg)
 end
 

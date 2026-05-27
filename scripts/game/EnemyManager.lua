@@ -381,6 +381,8 @@ function shootMortar(e, player)
         vHeight   = vHeight,
         life      = flightTime + 1.0,  -- 稍留余量
         aoeRadius = 55 + math.random(0, 15),
+        landX     = targetX,  -- 预计算落点（预警圈固定位置）
+        landY     = targetY,
     })
 end
 
@@ -962,6 +964,7 @@ function drawLaserEnemy(vg, e, flash)
     nvgFillColor(vg, nvgRGBAf(bodyR, bodyG, bodyB, 1.0))
     nvgFill(vg)
     -- 水晶描边
+    nvgLineJoin(vg, NVG_ROUND)
     nvgStrokeColor(vg, nvgRGBAf(0.5, 0.1, 0.15, 0.8))
     nvgStrokeWidth(vg, 1.5)
     nvgStroke(vg)
@@ -997,16 +1000,31 @@ function drawLaserEnemy(vg, e, flash)
             nvgFillColor(vg, nvgRGBAf(1.0, 0.3, 0.1, 0.8))
             nvgFill(vg)
         end
-        -- 方向指示线（细虚线预警）
+        -- 方向指示线（圆角虚线段预警，与瞄准线风格统一）
         local dirX = math.cos(e.laserAngle)
         local dirY = math.sin(e.laserAngle)
         local chargeT = e.laserTimer / e.cfg.laserChargeTime
-        nvgBeginPath(vg)
-        nvgMoveTo(vg, dirX * r, dirY * r)
-        nvgLineTo(vg, dirX * (r + 40 * chargeT), dirY * (r + 40 * chargeT))
-        nvgStrokeColor(vg, nvgRGBAf(1.0, 0.2, 0.1, 0.4 * chargeT))
-        nvgStrokeWidth(vg, 2.0)
-        nvgStroke(vg)
+        -- 预警线长度随蓄力进度增长（最远到激光射程的 60%）
+        local warnLen = (60 + 240 * chargeT)
+        local startDist = r
+        local endDist = startDist + warnLen
+        -- 绘制虚线段（胶囊圆头）
+        local dashLen = 10
+        local gapLen  = 7
+        local step = dashLen + gapLen
+        nvgLineCap(vg, NVG_ROUND)
+        nvgStrokeColor(vg, nvgRGBAf(1.0, 0.2, 0.1, 0.3 + 0.5 * chargeT))
+        nvgStrokeWidth(vg, 2.5)
+        local pos = 0
+        while pos < warnLen do
+            local segStart = startDist + pos
+            local segEnd = math.min(segStart + dashLen, endDist)
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, dirX * segStart, dirY * segStart)
+            nvgLineTo(vg, dirX * segEnd, dirY * segEnd)
+            nvgStroke(vg)
+            pos = pos + step
+        end
     end
 
     -- hitFlash
