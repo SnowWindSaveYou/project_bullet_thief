@@ -58,10 +58,28 @@ local ENEMY_TYPES = {
         bulletSpeed   = 380,
         bulletDamage  = 2,   -- 高伤单发，夺取后一击毙命
     },
+    laser = {
+        radius        = 16,
+        hp            = 4,
+        speed         = 30,   -- 极慢
+        color         = { 0.7, 0.0, 0.1 },  -- 深红
+        shootInterval = 6.0,  -- 激光循环间隔
+        bulletCount   = 0,    -- 不发射子弹
+        bulletSpread  = 0,
+        bulletSpeed   = 0,
+        bulletDamage  = 0,
+        -- 激光专属参数
+        laserChargeTime = 1.5,   -- 蓄力时间
+        laserFireTime   = 1.2,   -- 发射持续时间
+        laserDamage     = 1,     -- 每 tick 伤害
+        laserWidth      = 8,     -- 光束宽度
+        laserRange      = 500,   -- 最大射程
+    },
 }
 
 -- 生成间隔（随难度缩短）
 local BASE_SPAWN_INTERVAL = 1.8
+local autoSpawnEnabled_ = true
 
 function M.init(_W, _H)
     W_ = _W
@@ -74,6 +92,12 @@ function M.reset()
     spawnTimer_ = 1.0
     waveTimer_  = 0
     difficulty_ = 1.0
+    autoSpawnEnabled_ = true
+end
+
+--- 设置是否自动生成敌人（练习模式用）
+function M.setAutoSpawn(enabled)
+    autoSpawnEnabled_ = enabled
 end
 
 function M.getEnemies()
@@ -86,15 +110,17 @@ function M.update(dt)
     -- 难度随时间提升
     difficulty_ = 1.0 + waveTimer_ * 0.015
 
-    -- 生成
-    local spawnInterval = BASE_SPAWN_INTERVAL / math.min(difficulty_, 3.0)
-    spawnTimer_ = spawnTimer_ - dt
-    if spawnTimer_ <= 0 then
-        spawnTimer_ = spawnInterval
-        local count = math.floor(difficulty_ * 0.7)
-        count = math.max(1, math.min(count, 4))
-        for _ = 1, count do
-            spawnEnemy()
+    -- 生成（可被禁用，如练习模式）
+    if autoSpawnEnabled_ then
+        local spawnInterval = BASE_SPAWN_INTERVAL / math.min(difficulty_, 3.0)
+        spawnTimer_ = spawnTimer_ - dt
+        if spawnTimer_ <= 0 then
+            spawnTimer_ = spawnInterval
+            local count = math.floor(difficulty_ * 0.7)
+            count = math.max(1, math.min(count, 4))
+            for _ = 1, count do
+                spawnEnemy()
+            end
         end
     end
 
@@ -107,27 +133,80 @@ function M.update(dt)
             enemyPool_:release(e)
             table.remove(enemies_, i)
         else
-            -- 朝玩家移动
-            local dx = player.x - e.x
-            local dy = player.y - e.y
-            local dist = math.sqrt(dx * dx + dy * dy)
-            if dist > e.radius + player.radius + 5 then
-                local spd = e.speed * dt
-                e.x = e.x + (dx / dist) * spd
-                e.y = e.y + (dy / dist) * spd
-            end
-
-            -- age 累加（用于动画效果，如幽灵眼血丝旋转）
+            -- age 累加（用于动画效果）
             e.age = (e.age or 0) + dt
 
-            -- 射击计时
-            e.shootTimer = e.shootTimer - dt
-            if e.shootTimer <= 0 then
-                e.shootTimer = e.cfg.shootInterval * (0.8 + math.random() * 0.4)
-                shootAtPlayer(e, player)
+            if e.etype == "laser" then
+                -- 激光敌人特殊状态机
+                updateLaserEnemy(e, player, dt)
+            else
+                -- 朝玩家移动
+                local dx = player.x - e.x
+                local dy = player.y - e.y
+                local dist = math.sqrt(dx * dx + dy * dy)
+                if dist > e.radius + player.radius + 5 then
+                    local spd = e.speed * dt
+                    e.x = e.x + (dx / dist) * spd
+                    e.y = e.y + (dy / dist) * spd
+                end
+
+                -- 射击计时
+                e.shootTimer = e.shootTimer - dt
+                if e.shootTimer <= 0 then
+                    e.shootTimer = e.cfg.shootInterval * (0.8 + math.random() * 0.4)
+                    shootAtPlayer(e, player)
+                end
             end
         end
     end
+end
+
+--- 强制生成一个敌人（Boss 召唤用）
+function M.forceSpawn()
+    spawnEnemy()
+end
+
+--- 生成指定类型的敌人（练习模式用）
+---@param etype string "scout"|"heavy"|"sniper"|"laser"
+function M.spawnType(etype)
+    local cfg = ENEMY_TYPES[etype]
+    if not cfg then return end
+
+    local margin = 40
+    local side = math.random(1, 4)
+    local x, y
+    local iW = math.floor(W_)
+    local iH = math.floor(H_)
+    if side == 1 then
+        x = math.random(margin, iW - margin); y = -margin
+    elseif side == 2 then
+        x = math.random(margin, iW - margin); y = iH + margin
+    elseif side == 3 then
+        x = -margin; y = math.random(margin, iH - margin)
+    else
+        x = iW + margin; y = math.random(margin, iH - margin)
+    end
+
+    local e = enemyPool_:get()
+    e.x          = x
+    e.y          = y
+    e.etype      = etype
+    e.cfg        = cfg
+    e.radius     = cfg.radius
+    e.hp         = cfg.hp
+    e.maxHp      = cfg.hp
+    e.speed      = cfg.speed
+    e.shootTimer = cfg.shootInterval * (0.5 + math.random() * 0.5)
+    e.dead       = false
+    e.hitFlash   = 0
+    e.age        = 0
+    if etype == "laser" then
+        e.laserState    = "idle"
+        e.laserTimer    = 0
+        e.laserAngle    = 0
+        e.laserDmgTick  = 0
+    end
+    enemies_[#enemies_ + 1] = e
 end
 
 -- 对敌人造成伤害
@@ -166,18 +245,20 @@ function spawnEnemy()
     local margin = 40
     local side = math.random(1, 4)
     local x, y
+    local iW = math.floor(W_)
+    local iH = math.floor(H_)
     if side == 1 then
-        x = math.random(margin, W_ - margin)
+        x = math.random(margin, iW - margin)
         y = -margin
     elseif side == 2 then
-        x = math.random(margin, W_ - margin)
-        y = H_ + margin
+        x = math.random(margin, iW - margin)
+        y = iH + margin
     elseif side == 3 then
         x = -margin
-        y = math.random(margin, H_ - margin)
+        y = math.random(margin, iH - margin)
     else
-        x = W_ + margin
-        y = math.random(margin, H_ - margin)
+        x = iW + margin
+        y = math.random(margin, iH - margin)
     end
 
     -- 随难度决定类型
@@ -185,10 +266,16 @@ function spawnEnemy()
     local r = math.random()
     if difficulty_ < 2.0 then
         etype = r < 0.7 and "scout" or "heavy"
-    else
+    elseif difficulty_ < 2.5 then
         if r < 0.5 then etype = "scout"
         elseif r < 0.8 then etype = "heavy"
         else etype = "sniper" end
+    else
+        -- 高难度引入激光敌人
+        if r < 0.4 then etype = "scout"
+        elseif r < 0.65 then etype = "heavy"
+        elseif r < 0.85 then etype = "sniper"
+        else etype = "laser" end
     end
 
     local cfg = ENEMY_TYPES[etype]
@@ -205,6 +292,14 @@ function spawnEnemy()
     e.dead       = false
     e.hitFlash   = 0
     e.age        = 0
+    -- 激光敌人特殊字段
+    if etype == "laser" then
+        e.laserState    = "idle"       -- idle / charging / firing / cooldown
+        e.laserTimer    = 0
+        e.laserAngle    = 0            -- 激光瞄准角度
+        e.laserAlpha    = 0            -- 光束透明度（用于淡入淡出）
+        e.chargeParticles = {}         -- 蓄力粒子
+    end
     table.insert(enemies_, e)
 end
 
@@ -213,6 +308,15 @@ function shootAtPlayer(e, player)
     local dy = player.y - e.y
     local dist = math.sqrt(dx * dx + dy * dy)
     if dist < 1 then return end
+
+    -- Heavy 敌人：难度 >= 1.5 时偶尔发射迫击炮（每3次射击1次）
+    if e.etype == "heavy" and difficulty_ >= 1.5 then
+        e.shootCount = (e.shootCount or 0) + 1
+        if e.shootCount % 3 == 0 then
+            shootMortar(e, player)
+            return
+        end
+    end
 
     -- 简单预判（提前量）
     local lead = e.cfg.bulletSpeed and (dist / e.cfg.bulletSpeed * 0.3) or 0
@@ -246,6 +350,170 @@ function shootAtPlayer(e, player)
     end
 end
 
+-- ——— 迫击炮发射 ———
+-- 抛物线子弹，从敌人位置发射，落到玩家当前位置附近
+function shootMortar(e, player)
+    -- 计算到玩家的方向和距离
+    local dx = player.x - e.x
+    local dy = player.y - e.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    if dist < 1 then return end
+
+    -- 飞行时间取决于距离（越远飞越久）
+    local flightTime = math.max(0.8, dist / 200)
+    -- 水平速度：飞行时间内到达落点（加一点随机偏移）
+    local targetX = player.x + (math.random() - 0.5) * 40
+    local targetY = player.y + (math.random() - 0.5) * 40
+    local vx = (targetX - e.x) / flightTime
+    local vy = (targetY - e.y) / flightTime
+    -- 垂直速度：初始向上（负 height 表示在空中），使其在 flightTime 后落回 0
+    -- h(t) = h0 + vH*t + 0.5*g*t^2 = 0 → vH = -(h0 + 0.5*g*t^2) / t
+    local gravity = 600
+    local initHeight = -120  -- 初始高度（负值表示在空中）
+    local vHeight = -(initHeight + 0.5 * gravity * flightTime * flightTime) / flightTime
+
+    BulletMgr.spawnEnemyBullet(e.x, e.y, vx, vy, {
+        btype     = "mortar",
+        stealable = false,
+        damage    = 2,
+        radius    = 10,
+        height    = initHeight,
+        vHeight   = vHeight,
+        life      = flightTime + 1.0,  -- 稍留余量
+        aoeRadius = 55 + math.random(0, 15),
+    })
+end
+
+-- ——— 激光敌人状态机 ———
+-- 状态: idle(接近玩家) → charging(蓄力瞄准) → firing(发射) → cooldown(冷却)
+function updateLaserEnemy(e, player, dt)
+    local dx = player.x - e.x
+    local dy = player.y - e.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    local cfg = e.cfg
+
+    if e.laserState == "idle" then
+        -- 移动接近玩家到射程内
+        local desiredDist = cfg.laserRange * 0.6
+        if dist > desiredDist then
+            local spd = e.speed * dt
+            if dist > 1 then
+                e.x = e.x + (dx / dist) * spd
+                e.y = e.y + (dy / dist) * spd
+            end
+        end
+        -- 射击计时
+        e.shootTimer = e.shootTimer - dt
+        if e.shootTimer <= 0 and dist < cfg.laserRange then
+            -- 开始蓄力
+            e.laserState = "charging"
+            e.laserTimer = 0
+            -- 锁定瞄准方向
+            e.laserAngle = math.atan(dy, dx)
+            -- 初始化蓄力粒子
+            e.chargeParticles = {}
+            for ci = 1, 8 do
+                local angle = (ci / 8) * math.pi * 2
+                local spd = 60 + math.random() * 40
+                e.chargeParticles[ci] = {
+                    angle = angle,
+                    dist  = 30 + math.random() * 20,
+                    speed = spd,
+                    size  = 3 + math.random() * 2,
+                }
+            end
+        end
+
+    elseif e.laserState == "charging" then
+        -- 蓄力阶段：粒子聚集 + 缓慢追踪玩家方向
+        e.laserTimer = e.laserTimer + dt
+        -- 缓慢追踪玩家（蓄力期间微调方向，但不完全锁定）
+        local targetAngle = math.atan(dy, dx)
+        local angleDiff = targetAngle - e.laserAngle
+        -- 归一化角度差
+        while angleDiff > math.pi do angleDiff = angleDiff - math.pi * 2 end
+        while angleDiff < -math.pi do angleDiff = angleDiff + math.pi * 2 end
+        -- 蓄力前半段追踪快，后半段几乎锁定（给玩家反应时间）
+        local trackSpeed = 1.5 * (1.0 - e.laserTimer / cfg.laserChargeTime)
+        e.laserAngle = e.laserAngle + angleDiff * trackSpeed * dt
+
+        -- 粒子收缩向中心
+        for _, p in ipairs(e.chargeParticles) do
+            p.dist = math.max(2, p.dist - p.speed * dt)
+        end
+
+        -- 蓄力完成 → 发射
+        if e.laserTimer >= cfg.laserChargeTime then
+            e.laserState = "firing"
+            e.laserTimer = 0
+            e.laserAlpha = 1.0
+            e.laserDmgTick = 0  -- 伤害计时器
+        end
+
+    elseif e.laserState == "firing" then
+        -- 发射阶段：激光射线持续，缓慢衰减
+        e.laserTimer = e.laserTimer + dt
+        -- 激光发射中不移动，但方向完全固定（给玩家闪避空间）
+        -- 伤害 tick（每 0.25s 造成一次伤害）
+        e.laserDmgTick = (e.laserDmgTick or 0) + dt
+
+        -- 激光结束
+        if e.laserTimer >= cfg.laserFireTime then
+            e.laserState = "cooldown"
+            e.laserTimer = 0
+            e.laserAlpha = 0
+        end
+
+    elseif e.laserState == "cooldown" then
+        -- 冷却：恢复移动
+        e.laserTimer = e.laserTimer + dt
+        -- 缓慢移动
+        if dist > e.radius + 20 then
+            local spd = e.speed * 0.5 * dt
+            if dist > 1 then
+                e.x = e.x + (dx / dist) * spd
+                e.y = e.y + (dy / dist) * spd
+            end
+        end
+        -- 冷却结束 → 回到 idle
+        if e.laserTimer >= 2.0 then
+            e.laserState = "idle"
+            e.shootTimer = cfg.shootInterval * (0.6 + math.random() * 0.4)
+        end
+    end
+end
+
+--- 获取当前激活的激光射线列表（供碰撞检测使用）
+--- 返回: { {x1, y1, x2, y2, width, damage, dmgTick, enemyIdx} ... }
+function M.getActiveLasers()
+    local lasers = {}
+    for i, e in ipairs(enemies_) do
+        if e.etype == "laser" and e.laserState == "firing" and not e.dead then
+            local cosA = math.cos(e.laserAngle)
+            local sinA = math.sin(e.laserAngle)
+            local range = e.cfg.laserRange
+            lasers[#lasers + 1] = {
+                x1       = e.x,
+                y1       = e.y,
+                x2       = e.x + cosA * range,
+                y2       = e.y + sinA * range,
+                width    = e.cfg.laserWidth,
+                damage   = e.cfg.laserDamage,
+                dmgTick  = e.laserDmgTick or 0,
+                enemyIdx = i,
+            }
+        end
+    end
+    return lasers
+end
+
+--- 重置激光伤害计时器（被 main.lua 调用以控制伤害频率）
+--- @param enemyIdx number 敌人在 enemies_ 中的索引
+function M.resetLaserDmgTick(enemyIdx)
+    local e = enemies_[enemyIdx]
+    if e then e.laserDmgTick = 0 end
+end
+
 function drawEnemy(vg, e)
     -- 斜投影阴影
     local ox, oy = Renderer.shadowOffset(0)
@@ -267,6 +535,8 @@ function drawEnemy(vg, e)
         drawNightmareCat(vg, e, flash)
     elseif e.etype == "sniper" then
         drawGhostEye(vg, e, flash)
+    elseif e.etype == "laser" then
+        drawLaserEnemy(vg, e, flash)
     end
 end
 
@@ -662,6 +932,143 @@ function drawGhostEye(vg, e, flash)
     end
 
     nvgRestore(vg)
+end
+
+-- ——— 激光敌人 Laser Spectre ———
+-- 六边形水晶体 + 中心红核 + 蓄力粒子 + 激光射线
+function drawLaserEnemy(vg, e, flash)
+    local cx, cy, r = e.x, e.y, e.radius
+
+    nvgSave(vg)
+    nvgTranslate(vg, cx, cy)
+
+    -- 颜色
+    local bodyR, bodyG, bodyB = 0.15, 0.08, 0.2   -- 深紫黑
+    local coreR, coreG, coreB = 0.8, 0.05, 0.1    -- 红核
+    if flash > 0 then
+        bodyR, bodyG, bodyB = 0.5, 0.4, 0.5
+    end
+
+    -- === 身体：六边形水晶 ===
+    nvgBeginPath(vg)
+    for si = 0, 5 do
+        local angle = si / 6 * math.pi * 2 - math.pi / 6
+        local px = math.cos(angle) * r
+        local py = math.sin(angle) * r
+        if si == 0 then nvgMoveTo(vg, px, py)
+        else            nvgLineTo(vg, px, py) end
+    end
+    nvgClosePath(vg)
+    nvgFillColor(vg, nvgRGBAf(bodyR, bodyG, bodyB, 1.0))
+    nvgFill(vg)
+    -- 水晶描边
+    nvgStrokeColor(vg, nvgRGBAf(0.5, 0.1, 0.15, 0.8))
+    nvgStrokeWidth(vg, 1.5)
+    nvgStroke(vg)
+
+    -- === 中心核心（状态变色）===
+    local coreSize = r * 0.4
+    if e.laserState == "charging" then
+        -- 蓄力时核心脉冲变大
+        local pulseT = e.laserTimer / e.cfg.laserChargeTime
+        coreSize = r * (0.4 + 0.25 * pulseT)
+        coreR = 0.9; coreG = 0.1 + 0.2 * math.sin(e.age * 12); coreB = 0.05
+    elseif e.laserState == "firing" then
+        coreSize = r * 0.65
+        coreR = 1.0; coreG = 0.15; coreB = 0.0
+    end
+    nvgBeginPath(vg)
+    nvgCircle(vg, 0, 0, coreSize)
+    nvgFillColor(vg, nvgRGBAf(coreR, coreG, coreB, 1.0))
+    nvgFill(vg)
+    -- 核心发光
+    nvgBeginPath(vg)
+    nvgCircle(vg, 0, 0, coreSize * 1.3)
+    nvgFillColor(vg, nvgRGBAf(coreR, coreG * 0.5, coreB, 0.2))
+    nvgFill(vg)
+
+    -- === 蓄力粒子（charging 阶段）===
+    if e.laserState == "charging" and e.chargeParticles then
+        for _, p in ipairs(e.chargeParticles) do
+            local px = math.cos(p.angle) * p.dist
+            local py = math.sin(p.angle) * p.dist
+            nvgBeginPath(vg)
+            nvgCircle(vg, px, py, p.size)
+            nvgFillColor(vg, nvgRGBAf(1.0, 0.3, 0.1, 0.8))
+            nvgFill(vg)
+        end
+        -- 方向指示线（细虚线预警）
+        local dirX = math.cos(e.laserAngle)
+        local dirY = math.sin(e.laserAngle)
+        local chargeT = e.laserTimer / e.cfg.laserChargeTime
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, dirX * r, dirY * r)
+        nvgLineTo(vg, dirX * (r + 40 * chargeT), dirY * (r + 40 * chargeT))
+        nvgStrokeColor(vg, nvgRGBAf(1.0, 0.2, 0.1, 0.4 * chargeT))
+        nvgStrokeWidth(vg, 2.0)
+        nvgStroke(vg)
+    end
+
+    -- hitFlash
+    if flash > 0 then
+        nvgBeginPath(vg)
+        nvgCircle(vg, 0, 0, r)
+        nvgFillColor(vg, nvgRGBAf(1.0, 1.0, 1.0, flash * 0.5))
+        nvgFill(vg)
+    end
+
+    nvgRestore(vg)
+end
+
+-- ——— 激光射线绘制（在所有敌人绘制后调用）———
+function M.drawLasers(vg)
+    for _, e in ipairs(enemies_) do
+        if e.etype == "laser" and e.laserState == "firing" and not e.dead then
+            local angle = e.laserAngle
+            local range = e.cfg.laserRange
+            local width = e.cfg.laserWidth
+
+            -- 射线闪烁效果
+            local flicker = 0.85 + 0.15 * math.sin(e.age * 30)
+            local fireT = e.laserTimer / e.cfg.laserFireTime
+            -- 结束前淡出
+            local fadeAlpha = fireT > 0.8 and (1.0 - (fireT - 0.8) / 0.2) or 1.0
+
+            local dirX = math.cos(angle)
+            local dirY = math.sin(angle)
+            local startX = e.x + dirX * e.radius
+            local startY = e.y + dirY * e.radius
+            local endX = e.x + dirX * range
+            local endY = e.y + dirY * range
+
+            -- 外层光晕（宽、半透明）
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, startX, startY)
+            nvgLineTo(vg, endX, endY)
+            nvgStrokeColor(vg, nvgRGBAf(0.8, 0.1, 0.0, 0.25 * fadeAlpha * flicker))
+            nvgStrokeWidth(vg, width * 3.0)
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+
+            -- 中层光束（主体）
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, startX, startY)
+            nvgLineTo(vg, endX, endY)
+            nvgStrokeColor(vg, nvgRGBAf(0.9, 0.15, 0.05, 0.7 * fadeAlpha * flicker))
+            nvgStrokeWidth(vg, width * 1.5)
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+
+            -- 内层核心（亮白/亮红）
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, startX, startY)
+            nvgLineTo(vg, endX, endY)
+            nvgStrokeColor(vg, nvgRGBAf(1.0, 0.6, 0.4, 0.9 * fadeAlpha * flicker))
+            nvgStrokeWidth(vg, width * 0.5)
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+        end
+    end
 end
 
 return M

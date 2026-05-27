@@ -1,22 +1,16 @@
-# Engine internals (read-only, not user code)
-engine-docs/
-urhox-libs/
-templates/
-examples/
-schemas/
-lua-tools/
-prompts/
-.emmylua/
-
-# AI / editor config
-.claude/
-CLAUDE.md
-
-# Build & temp
 .build/
-.tmp/
 dist/
-logs/
-
-# Project config (auto-generated)
+.agent/
+.claude/
+.cli/
+.emmylua/
 .project/
+.tmp/
+engine-docs/
+examples/
+lua-tools/
+schemas/
+templates/
+urhox-libs/
+logs/
+*.meta

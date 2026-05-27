@@ -12,6 +12,7 @@ local Renderer     = require "game.Renderer"
 local Input        = require "game.InputHandler"
 local Player       = require "game.Player"
 local EnemyMgr     = require "game.EnemyManager"
+local BossMgr      = require "game.BossManager"
 local BulletMgr    = require "game.BulletManager"
 local ItemMgr      = require "game.ItemManager"
 local UI           = require "game.GameUI"
@@ -20,6 +21,7 @@ local Upgrade      = require "game.UpgradeSystem"
 -- 新增页面
 local PagePreLevel = require "ui.PagePreLevel"
 local PageBestiary = require "ui.PageBestiary"
+local PagePractice = require "ui.PagePractice"
 local DebugPanel   = require "ui.DebugPanel"
 
 -- ============================================================================
@@ -40,6 +42,8 @@ local wasBulletTime = false  -- 子弹时间闪光追踪
 local highScore_ = 0
 -- 难度倍率
 local difficultyMult_ = 1.0
+-- 练习模式标记
+local practiceMode_ = false
 
 -- ============================================================================
 -- 引擎入口
@@ -51,7 +55,7 @@ function Start()
     W         = phW / dpr
     H         = phH / dpr
 
-    print(string.format("[BulletThief] 分辨率: %dx%d  DPR: %.1f  逻辑: %dx%d",
+    print(string.format("[BulletThief] 分辨率: %dx%d  DPR: %.1f  逻辑: %.0fx%.0f",
         phW, phH, dpr, W, H))
 
     -- 创建 NanoVG 上下文（AA 模式）
@@ -69,6 +73,7 @@ function Start()
     Renderer.init(vg, W, H, dpr)
     Player.init(W, H)
     EnemyMgr.init(W, H)
+    BossMgr.init(W, H)
     BulletMgr.init(W, H)
     ItemMgr.init(W, H)
     UI.init(vg, W, H)
@@ -78,6 +83,7 @@ function Start()
     -- 新页面初始化
     PagePreLevel.init(W, H)
     PageBestiary.init(W, H)
+    PagePractice.init(W, H)
     DebugPanel.init(W, H)
 
     VFX.setContext(vg, W, H, 0)
@@ -129,6 +135,38 @@ function HandleUpdate(eventType, eventData)
     elseif state == "bestiary" then
         PageBestiary.update(dt)
 
+    elseif state == "practice" then
+        -- 练习模式：与 playing 相同的游戏逻辑，但不自动生成敌人
+        PagePractice.update(dt)
+        Input.update(dt)
+        Player.update(dt)
+
+        local isBT = Player.getData().bulletTimeActive
+        if isBT and not wasBulletTime then
+            VFX.triggerBTFlash()
+        end
+        wasBulletTime = isBT
+        local btScale = isBT and 0.2 or 1.0
+        local slowDt  = dt * btScale
+
+        EnemyMgr.update(slowDt)
+        BulletMgr.update(slowDt, dt)
+        ItemMgr.update(dt)
+        VFX.setContext(vg, W, H, gameTime)
+        VFX.updateAll(dt)
+
+        -- 碰撞检测
+        checkCollisions(dt)
+
+        -- 练习模式：玩家不会死，HP 低时自动回满
+        local pData = Player.getData()
+        if pData.hp <= 0 then
+            pData.hp = pData.maxHp
+        end
+
+        UI.update(dt)
+        Input.endFrame()
+
     elseif state == "playing" then
         Input.update(dt)
         Player.update(dt)
@@ -143,10 +181,20 @@ function HandleUpdate(eventType, eventData)
         local slowDt  = dt * btScale
 
         EnemyMgr.update(slowDt)
+        BossMgr.update(slowDt)
         BulletMgr.update(slowDt, dt)
         ItemMgr.update(dt)
         VFX.setContext(vg, W, H, gameTime)
         VFX.updateAll(dt)
+
+        -- Boss 触发检测
+        BossMgr.checkSpawn(Player.getKillCount())
+
+        -- Boss 召唤小怪（转调 EnemyMgr）
+        local summonCount = BossMgr.getPendingSummon()
+        for _ = 1, summonCount do
+            EnemyMgr.forceSpawn()
+        end
 
         -- 碰撞检测
         checkCollisions(dt)
@@ -183,6 +231,11 @@ function checkCollisions(dt)
             local dy = b.y - player.y
             local dist = math.sqrt(dx * dx + dy * dy)
 
+            -- 迫击炮不做直接碰撞（它的伤害在 AOE 阶段处理）
+            if b.btype == "mortar" then
+                goto continue_bullet
+            end
+
             -- 擦弹
             if dist < player.grazeRadius and not b.grazed then
                 b.grazed = true
@@ -204,6 +257,55 @@ function checkCollisions(dt)
                     VFX.triggerShake(6, 0.25)
                     VFX.spawnHit(b.x, b.y, 255, 80, 80)
                     VFX.spawnPopup("-" .. (b.damage or 1), player.x, player.y - 40, 255, 80, 80)
+                end
+            end
+        end
+        ::continue_bullet::
+    end
+
+    -- 1b. 迫击炮 AOE 范围伤害检测（落地爆炸后对玩家造成伤害）
+    for i = #bullets, 1, -1 do
+        local b = bullets[i]
+        if b.aoeTriggered then
+            local dx = b.aoeX - player.x
+            local dy = b.aoeY - player.y
+            local dist = math.sqrt(dx * dx + dy * dy)
+            if dist < b.aoeRadius then
+                -- 距离衰减：中心全伤害，边缘半伤害
+                local dmgFactor = 1.0 - (dist / b.aoeRadius) * 0.5
+                local aoeDmg = math.ceil((b.damage or 2) * dmgFactor)
+                Player.takeDamage(aoeDmg)
+                VFX.spawnPopup("-" .. aoeDmg, player.x, player.y - 40, 255, 100, 30)
+            end
+            b.aoeTriggered = false  -- 只触发一次
+        end
+    end
+
+    -- 1c. 激光 vs 玩家（线段碰撞检测，持续伤害每 0.25s 一次）
+    local lasers = EnemyMgr.getActiveLasers()
+    for li, laser in ipairs(lasers) do
+        -- 点到线段距离计算
+        local lx1, ly1 = laser.x1, laser.y1
+        local lx2, ly2 = laser.x2, laser.y2
+        local segDx, segDy = lx2 - lx1, ly2 - ly1
+        local segLenSq = segDx * segDx + segDy * segDy
+        if segLenSq > 0 then
+            local t = ((player.x - lx1) * segDx + (player.y - ly1) * segDy) / segLenSq
+            t = math.max(0, math.min(1, t))
+            local closestX = lx1 + t * segDx
+            local closestY = ly1 + t * segDy
+            local pdx = player.x - closestX
+            local pdy = player.y - closestY
+            local pDist = math.sqrt(pdx * pdx + pdy * pdy)
+            local hitWidth = (laser.width or 8) * 0.5 + player.radius
+            if pDist < hitWidth then
+                -- 检查 tick 计时
+                if laser.dmgTick >= 0.25 then
+                    Player.takeDamage(laser.damage or 1)
+                    EnemyMgr.resetLaserDmgTick(laser.enemyIdx)
+                    VFX.spawnHit(closestX, closestY, 255, 50, 50)
+                    VFX.spawnPopup("-" .. (laser.damage or 1), player.x, player.y - 40, 255, 50, 50)
+                    VFX.triggerShake(4, 0.15)
                 end
             end
         end
@@ -249,6 +351,72 @@ function checkCollisions(dt)
                         EnemyMgr.damageEnemy(ei, b.damage or 1, true)
                         VFX.spawnHit(b.x, b.y, 100, 220, 255)
                         VFX.spawnPopup(tostring(b.damage or 1), e.x, e.y - 30, 100, 220, 255)
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2c. 轨道子弹 vs Boss
+    if BossMgr.isActive() then
+        local bossData = BossMgr.getBoss()
+        if bossData and not bossData.dead then
+            for oi = #orbitBullets, 1, -1 do
+                local ob = orbitBullets[oi]
+                if ob.btShielded then goto continue_orbit_boss end
+                local bdx = ob.x - bossData.x
+                local bdy = ob.y - bossData.y
+                local bdist = math.sqrt(bdx * bdx + bdy * bdy)
+                if bdist < (7 + bossData.radius) then
+                    local dmg = (ob.damage or 1) * (player.orbitDamage or 1)
+                    BossMgr.damageBoss(dmg)
+                    BulletMgr.removeOrbitBullet(oi)
+                    VFX.spawnHit(ob.x, ob.y, 180, 100, 255)
+                    VFX.spawnPopup(tostring(dmg), bossData.x, bossData.y - 30, 180, 100, 255)
+                    VFX.triggerShake(3, 0.1)
+                    break
+                end
+                ::continue_orbit_boss::
+            end
+
+            -- 2d. 玩家子弹 vs Boss
+            for bi = #bullets, 1, -1 do
+                local b = bullets[bi]
+                if b.owner == "player" and not b.dead then
+                    local bdx = b.x - bossData.x
+                    local bdy = b.y - bossData.y
+                    local bdist = math.sqrt(bdx * bdx + bdy * bdy)
+                    if bdist < (b.radius + bossData.radius) then
+                        b.dead = true
+                        BossMgr.damageBoss(b.damage or 1)
+                        VFX.spawnHit(b.x, b.y, 180, 100, 255)
+                        VFX.spawnPopup(tostring(b.damage or 1), bossData.x, bossData.y - 30, 180, 100, 255)
+                    end
+                end
+            end
+
+            -- 2e. Boss 激光 vs 玩家
+            local bossLasers = BossMgr.getActiveLasers()
+            for _, laser in ipairs(bossLasers) do
+                local lx1, ly1 = laser.x1, laser.y1
+                local lx2, ly2 = laser.x2, laser.y2
+                local segDx, segDy = lx2 - lx1, ly2 - ly1
+                local segLenSq = segDx * segDx + segDy * segDy
+                if segLenSq > 0 then
+                    local t = ((player.x - lx1) * segDx + (player.y - ly1) * segDy) / segLenSq
+                    t = math.max(0, math.min(1, t))
+                    local closestX = lx1 + t * segDx
+                    local closestY = ly1 + t * segDy
+                    local pdx = player.x - closestX
+                    local pdy = player.y - closestY
+                    local pDist = math.sqrt(pdx * pdx + pdy * pdy)
+                    local hitWidth = (laser.width or 12) * 0.5 + player.radius
+                    if pDist < hitWidth and laser.dmgTick >= 0.25 then
+                        Player.takeDamage(laser.damage or 2)
+                        BossMgr.resetBossLaserDmgTick()
+                        VFX.spawnHit(closestX, closestY, 180, 0, 255)
+                        VFX.spawnPopup("-" .. (laser.damage or 2), player.x, player.y - 40, 180, 0, 255)
+                        VFX.triggerShake(5, 0.2)
                     end
                 end
             end
@@ -313,15 +481,52 @@ end
 -- ============================================================================
 local function startGame()
     difficultyMult_ = PagePreLevel.getSelectedDifficulty()
+    practiceMode_ = false
     GameState.set("playing")
     Player.reset(W, H)
     EnemyMgr.reset()
+    BossMgr.reset()
     BulletMgr.reset()
     ItemMgr.reset()
     Upgrade.reset()
     VFX.resetAll()
     UI.hideMenu()
     print("[BulletThief] 开始游戏 difficulty=" .. difficultyMult_)
+end
+
+-- ============================================================================
+-- 练习模式（空场地，手动召唤敌人）
+-- ============================================================================
+local function startPractice()
+    practiceMode_ = true
+    GameState.set("practice")
+    Player.reset(W, H)
+    EnemyMgr.reset()
+    EnemyMgr.setAutoSpawn(false)  -- 禁用自动生成
+    BossMgr.reset()
+    BulletMgr.reset()
+    ItemMgr.reset()
+    VFX.resetAll()
+    UI.hideMenu()
+    PagePractice.show()
+    print("[BulletThief] 进入练习模式")
+end
+
+--- 处理练习模式召唤
+local function handlePracticeSummon()
+    local spawnList = PagePractice.getSpawnList()
+    for _, entry in ipairs(spawnList) do
+        for _ = 1, entry.count do
+            if entry.type == "boss" then
+                -- Boss 只能存在一个，重复召唤忽略
+                if not BossMgr.isActive() then
+                    BossMgr.spawnBoss()
+                end
+            else
+                EnemyMgr.spawnType(entry.type)
+            end
+        end
+    end
 end
 
 -- ============================================================================
@@ -347,6 +552,39 @@ function HandleRender(eventType, eventData)
     elseif state == "bestiary" then
         PageBestiary.draw(vg, W, H)
 
+    elseif state == "practice" then
+        -- 练习模式：渲染游戏世界 + 浮动面板
+        Renderer.drawBackground("playing")
+        local shakeX, shakeY = VFX.getShakeOffset()
+        nvgSave(vg)
+        nvgTranslate(vg, shakeX, shakeY)
+        Renderer.drawWorld()
+        ItemMgr.draw(vg)
+        EnemyMgr.draw(vg)
+        EnemyMgr.drawLasers(vg)
+        BossMgr.draw(vg)
+        BossMgr.drawLasers(vg)
+        BulletMgr.draw(vg)
+        Player.draw(vg)
+        VFX.drawAOEExplosions()
+        VFX.drawHitEffects()
+        VFX.drawGrazeSparks()
+        VFX.drawHealEffects()
+        VFX.drawBanners()
+        VFX.drawPopups()
+        nvgRestore(vg)
+
+        if Player.getData().bulletTimeActive then
+            Renderer.drawVignette(0.55)
+        end
+        VFX.drawBTFlash()
+        BulletMgr.drawQTEFlash(vg, W, H)
+        BossMgr.drawHPBar(vg)
+        UI.draw(vg, "playing")
+
+        -- 练习面板覆盖在最上方
+        PagePractice.draw(vg, W, H)
+
     elseif state == "playing" or state == "upgrade" then
         Renderer.drawBackground(state)
         local shakeX, shakeY = VFX.getShakeOffset()
@@ -355,8 +593,12 @@ function HandleRender(eventType, eventData)
         Renderer.drawWorld()
         ItemMgr.draw(vg)
         EnemyMgr.draw(vg)
+        EnemyMgr.drawLasers(vg)
+        BossMgr.draw(vg)
+        BossMgr.drawLasers(vg)
         BulletMgr.draw(vg)
         Player.draw(vg)
+        VFX.drawAOEExplosions()
         VFX.drawHitEffects()
         VFX.drawGrazeSparks()
         VFX.drawHealEffects()
@@ -372,6 +614,9 @@ function HandleRender(eventType, eventData)
 
         -- QTE 爆发全屏闪光
         BulletMgr.drawQTEFlash(vg, W, H)
+
+        -- Boss 血条（在 shake 之外，固定位置）
+        BossMgr.drawHPBar(vg)
 
         -- UI 层
         UI.draw(vg, state)
@@ -435,6 +680,12 @@ function HandleKeyDown(eventType, eventData)
             GameState.set("prelevel")
             PagePreLevel.show(highScore_)
         end
+    elseif state == "practice" then
+        if key == KEY_ESCAPE then
+            practiceMode_ = false
+            GameState.set("prelevel")
+            PagePreLevel.show(highScore_)
+        end
     elseif state == "gameover" then
         if key == KEY_RETURN or key == KEY_SPACE then
             GameState.set("menu")
@@ -475,11 +726,23 @@ function HandleMouseDown(eventType, eventData)
         elseif action == "bestiary" then
             GameState.set("bestiary")
             PageBestiary.show()
+        elseif action == "practice" then
+            startPractice()
         end
 
     elseif state == "bestiary" then
         local action = PageBestiary.onClick(x, y)
         if action == "back" then
+            GameState.set("prelevel")
+            PagePreLevel.show(highScore_)
+        end
+
+    elseif state == "practice" then
+        local action = PagePractice.onClick(x, y)
+        if action == "summon" then
+            handlePracticeSummon()
+        elseif action == "back" then
+            practiceMode_ = false
             GameState.set("prelevel")
             PagePreLevel.show(highScore_)
         end
@@ -536,11 +799,23 @@ function HandleTouchBegin(eventType, eventData)
         elseif action == "bestiary" then
             GameState.set("bestiary")
             PageBestiary.show()
+        elseif action == "practice" then
+            startPractice()
         end
 
     elseif state == "bestiary" then
         local action = PageBestiary.onClick(x, y)
         if action == "back" then
+            GameState.set("prelevel")
+            PagePreLevel.show(highScore_)
+        end
+
+    elseif state == "practice" then
+        local action = PagePractice.onClick(x, y)
+        if action == "summon" then
+            handlePracticeSummon()
+        elseif action == "back" then
+            practiceMode_ = false
             GameState.set("prelevel")
             PagePreLevel.show(highScore_)
         end

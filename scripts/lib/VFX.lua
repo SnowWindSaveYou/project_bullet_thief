@@ -484,11 +484,11 @@ local function drawOnePopup(p)
 
     if progress < 0.15 then
         local t  = progress / 0.15
-        curScale = baseScale * easeOutElastic(t) * 2.0
+        curScale = baseScale * easeOutElastic(t) * 1.4
         alpha    = math.min(1.0, t * 8)   -- 快速淡入
     elseif progress < 0.30 then
         local t  = (progress - 0.15) / 0.15
-        curScale = baseScale * lerp(2.0, 1.0, easeInQuad(t))
+        curScale = baseScale * lerp(1.4, 1.0, easeInQuad(t))
     elseif progress < 0.75 then
         local t  = (progress - 0.30) / 0.45
         curScale = baseScale
@@ -497,7 +497,7 @@ local function drawOnePopup(p)
     else
         local t  = (progress - 0.75) / 0.25
         alpha    = 1.0 - easeOutQuad(t)
-        curY     = curY - 85 * easeOutQuad(t)
+        curY     = curY - 60 * easeOutQuad(t)
         curScale = baseScale * (1.0 + t * 0.25)
         rotation = 8 * t   -- 轻微旋转漂移
     end
@@ -520,12 +520,12 @@ local function drawOnePopup(p)
     -- ── 拖影（phase 4 专用）─────────────────────────────────────────────────
     if progress >= 0.75 then
         local t = (progress - 0.75) / 0.25
-        local baseOffY = -85 * easeOutQuad(t)
+        local baseOffY = -60 * easeOutQuad(t)
         local ghostCount = 3
         for gi = 1, ghostCount do
             local ghostT   = t - gi * 0.06
             if ghostT < 0 then goto skip_ghost end
-            local ghostOff = -85 * easeOutQuad(ghostT)
+            local ghostOff = -60 * easeOutQuad(ghostT)
             local ghostA   = alpha * (0.35 - gi * 0.10)
             if ghostA <= 0.01 then goto skip_ghost end
 
@@ -533,7 +533,7 @@ local function drawOnePopup(p)
             nvgTranslate(vg, curX, p.y + ghostOff)
             nvgScale(vg, curScale * 0.92, curScale * 0.92)
             nvgFontFace(vg, "pixel")
-            nvgFontSize(vg, 26)
+            nvgFontSize(vg, 20)
             nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
             nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, math.floor(ghostA * 255)))
             nvgText(vg, 0, 0, displayText, nil)
@@ -562,7 +562,7 @@ local function drawOnePopup(p)
 
     -- pixel 字体，四层渲染
     nvgFontFace(vg, "pixel")
-    nvgFontSize(vg, 28)
+    nvgFontSize(vg, 22)
     nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
 
     -- 对比色投影（HSV旋转155°）
@@ -1390,6 +1390,169 @@ function M.drawHealEffects()
 end
 
 -- ============================================================================
+-- AOE 爆炸特效 (Mortar Explosion)
+-- 多边形扩散环 + 碎片粒子 + 地面焦痕
+-- ============================================================================
+
+local aoeExplosions = {}
+local aoePool_ = Pool.new(8)
+
+--- 生成 AOE 爆炸特效
+---@param x number 爆炸中心 X
+---@param y number 爆炸中心 Y
+---@param radius number AOE 半径（用于视觉范围指示）
+---@param damage number 伤害值（仅用于 popup 显示）
+function M.spawnAOE(x, y, radius, damage)
+    radius = radius or 60
+    -- 多边形碎片粒子
+    local fragCount = math.random(8, 12)
+    local frags = {}
+    for i = 1, fragCount do
+        local angle = (i - 1) / fragCount * math.pi * 2 + (math.random() - 0.5) * 0.4
+        local spd = 80 + math.random() * 120
+        local sz = 4 + math.random() * 6
+        frags[i] = {
+            x = 0, y = 0,
+            vx = math.cos(angle) * spd,
+            vy = math.sin(angle) * spd,
+            size = sz,
+            rot = math.random() * math.pi * 2,
+            rotSpd = (math.random() - 0.5) * 12,
+            sides = math.random(3, 5),  -- 三角/四边/五边形碎片
+        }
+    end
+    local e = aoePool_:get()
+    e.x = x; e.y = y
+    e.radius = radius
+    e.damage = damage or 1
+    e.age = 0
+    e.duration = 0.55
+    e.frags = frags
+    e.ringRadius = 0
+    e.polyAngleOff = math.random() * math.pi * 2  -- 多边形初始旋转
+    aoeExplosions[#aoeExplosions + 1] = e
+end
+
+local function updateAOEExplosions(dt)
+    for i = #aoeExplosions, 1, -1 do
+        local e = aoeExplosions[i]
+        e.age = e.age + dt
+        if e.age >= e.duration then
+            aoePool_:release(e)
+            table.remove(aoeExplosions, i)
+        else
+            local t = e.age / e.duration
+            -- 多边形扩散环快速扩张
+            e.ringRadius = e.radius * easeOutQuad(math.min(1, t * 2.5))
+            -- 碎片运动
+            for _, f in ipairs(e.frags) do
+                f.x = f.x + f.vx * dt
+                f.y = f.y + f.vy * dt
+                f.vy = f.vy + 200 * dt  -- 重力
+                f.rot = f.rot + f.rotSpd * dt
+                f.vx = f.vx * 0.96  -- 阻力
+            end
+        end
+    end
+end
+
+function M.drawAOEExplosions()
+    for _, e in ipairs(aoeExplosions) do
+        local t = e.age / e.duration
+        local alpha = 1.0 - easeInQuad(t)
+
+        -- 1. 地面焦痕圆（持续显示，慢速淡出）
+        local scorchAlpha = math.max(0, 1.0 - t * 0.8)
+        nvgBeginPath(vg)
+        nvgCircle(vg, e.x, e.y, e.radius * 0.9)
+        nvgFillColor(vg, nvgRGBA(40, 20, 0, math.floor(scorchAlpha * 80)))
+        nvgFill(vg)
+
+        -- 2. 多边形扩散环（不规则八边形，模拟爆炸波）
+        if e.ringRadius > 2 then
+            local segments = 8
+            local ringAlpha = alpha * 0.9
+            nvgBeginPath(vg)
+            for si = 0, segments - 1 do
+                local angle = e.polyAngleOff + si / segments * math.pi * 2
+                -- 不规则半径：每条边有微小偏差
+                local rVar = e.ringRadius * (0.85 + 0.15 * math.sin(angle * 3.7 + e.age * 8))
+                local px = e.x + math.cos(angle) * rVar
+                local py = e.y + math.sin(angle) * rVar
+                if si == 0 then nvgMoveTo(vg, px, py)
+                else            nvgLineTo(vg, px, py) end
+            end
+            nvgClosePath(vg)
+            -- 填充：橙红渐变
+            nvgFillColor(vg, nvgRGBA(255, 120, 30, math.floor(ringAlpha * 60)))
+            nvgFill(vg)
+            -- 描边：亮橙
+            nvgStrokeColor(vg, nvgRGBA(255, 180, 50, math.floor(ringAlpha * 220)))
+            nvgStrokeWidth(vg, math.max(1.5, 4.0 * (1 - t)))
+            nvgStroke(vg)
+        end
+
+        -- 3. 中心闪光（前 20% 时间）
+        if t < 0.2 then
+            local flashT = t / 0.2
+            local flashR = 12 + 20 * flashT
+            local flashA = 1.0 - flashT
+            nvgBeginPath(vg)
+            nvgCircle(vg, e.x, e.y, flashR)
+            nvgFillColor(vg, nvgRGBA(255, 240, 200, math.floor(flashA * 230)))
+            nvgFill(vg)
+        end
+
+        -- 4. 碎片粒子
+        for _, f in ipairs(e.frags) do
+            local fragAlpha = alpha * 0.85
+            if fragAlpha < 0.02 then goto skip_frag end
+            local fx = e.x + f.x
+            local fy = e.y + f.y
+            nvgSave(vg)
+            nvgTranslate(vg, fx, fy)
+            nvgRotate(vg, f.rot)
+            -- 绘制多边形碎片
+            local sz = f.size * (1.0 - t * 0.5)
+            nvgBeginPath(vg)
+            for si = 0, f.sides - 1 do
+                local a = si / f.sides * math.pi * 2
+                local px = math.cos(a) * sz
+                local py = math.sin(a) * sz
+                if si == 0 then nvgMoveTo(vg, px, py)
+                else            nvgLineTo(vg, px, py) end
+            end
+            nvgClosePath(vg)
+            -- 颜色：从亮橙到暗红
+            local fr = math.floor(lerp(255, 180, t))
+            local fg = math.floor(lerp(140, 40, t))
+            local fb = math.floor(lerp(30, 10, t))
+            nvgFillColor(vg, nvgRGBA(fr, fg, fb, math.floor(fragAlpha * 200)))
+            nvgFill(vg)
+            nvgRestore(vg)
+            ::skip_frag::
+        end
+
+        -- 5. 外圈扩散辉光
+        if alpha > 0.1 then
+            local glowR = e.ringRadius * 1.3
+            local glow = nvgRadialGradient(vg, e.x, e.y, e.ringRadius * 0.5, glowR,
+                nvgRGBA(255, 100, 20, math.floor(alpha * 40)),
+                nvgRGBA(255, 60, 10, 0))
+            nvgBeginPath(vg)
+            nvgCircle(vg, e.x, e.y, glowR)
+            nvgFillPaint(vg, glow)
+            nvgFill(vg)
+        end
+    end
+end
+
+--- 获取活跃 AOE 爆炸列表（供碰撞检测使用）
+function M.getActiveAOEs()
+    return aoeExplosions
+end
+
+-- ============================================================================
 -- 统一 update / reset
 -- ============================================================================
 
@@ -1408,6 +1571,7 @@ function M.updateAll(dt)
     updateGrazeSparks(dt)
     updateBTFlash(dt)
     updateHealEffects(dt)
+    updateAOEExplosions(dt)
 end
 
 function M.resetAll()
@@ -1426,6 +1590,7 @@ function M.resetAll()
     sparkPool_:drain(grazeSparks); grazeSparks = {}
     btFlash = { alpha = 0, active = false }
     healPool_:drain(healEffects); healEffects = {}
+    aoePool_:drain(aoeExplosions); aoeExplosions = {}
 end
 
 return M

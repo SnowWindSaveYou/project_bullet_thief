@@ -19,7 +19,7 @@ function M.init(_vg, _W, _H, _dpr)
     W_  = _W
     H_  = _H
     dpr_ = _dpr
-    print(string.format("[Renderer] 逻辑尺寸: %dx%d", W_, H_))
+    print(string.format("[Renderer] 逻辑尺寸: %.0fx%.0f", W_, H_))
 end
 
 -- 计算斜投影阴影偏移量

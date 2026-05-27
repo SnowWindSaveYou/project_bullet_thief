@@ -341,10 +341,17 @@ function M.update(dt, realDt)
                     b.height  = b.height + b.vHeight * bdt
                     b.vHeight = b.vHeight + 600 * bdt  -- 重力
                     if b.height >= 0 and b.vHeight > 0 then
-                        -- 落地
+                        -- 落地 → 触发 AOE 爆炸
                         b.height = 0
                         b.dead   = true
-                        -- TODO: 触发 AOE 爆炸（在 main.lua checkCollisions 中处理）
+                        b.aoeTriggered = true  -- 标记，供碰撞检测处理伤害
+                        b.aoeX = b.x
+                        b.aoeY = b.y
+                        b.aoeRadius = (b.aoeRadius or 60)
+                        -- 触发视觉爆炸特效 + 震屏
+                        local VFX = require("lib.VFX")
+                        VFX.spawnAOE(b.x, b.y, b.aoeRadius, b.damage or 2)
+                        VFX.triggerShake(5, 0.2)
                     end
                 else
                     b.x = b.x + b.vx * bdt
@@ -705,15 +712,24 @@ function drawBullet(vg, b)
         nvgStroke(vg)
         return
     elseif b.btype == "mortar" then
-        -- 抛物线：深橙菱形，阴影表示高度
+        -- 抛物线：深橙菱形，实体根据高度向上偏移
         fr, fg, fb = 0.8, 0.5, 0.1
-        drawDiamond(vg, b.x, b.y, b.radius, fr, fg, fb)
-        -- 地面目标圆（阴影位置）
+        local heightOffset = -(b.height or 0) * 0.5  -- 高度越高，实体越往上
+        drawDiamond(vg, b.x, b.y + heightOffset, b.radius, fr, fg, fb)
+        -- 地面预警圆（落点阴影位置，越接近落地越大越不透明）
+        local landProgress = 1.0 - math.max(0, math.min(1, -(b.height or 0) / 80))
+        local warnAlpha = 0.2 + landProgress * 0.4
+        local warnRadius = (b.aoeRadius or 60) * (0.3 + landProgress * 0.7)
         nvgBeginPath(vg)
-        nvgCircle(vg, b.x + ox, b.y + oy, b.radius * 1.2)
-        nvgStrokeColor(vg, nvgRGBAf(0.8, 0.5, 0.1, 0.4))
-        nvgStrokeWidth(vg, 1.0)
+        nvgCircle(vg, b.x + ox, b.y + oy, warnRadius)
+        nvgStrokeColor(vg, nvgRGBAf(0.9, 0.4, 0.1, warnAlpha))
+        nvgStrokeWidth(vg, 1.5)
         nvgStroke(vg)
+        -- 地面填充预警（半透明）
+        nvgBeginPath(vg)
+        nvgCircle(vg, b.x + ox, b.y + oy, warnRadius)
+        nvgFillColor(vg, nvgRGBAf(0.9, 0.4, 0.1, warnAlpha * 0.2))
+        nvgFill(vg)
         return
     elseif b.stealable then
         -- 可夺取：橙红

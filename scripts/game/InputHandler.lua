@@ -54,7 +54,7 @@ function M.init(_W, _H)
     BT_BTN.y   = H_ - 100
     FIRE_BTN.x = W_ - 80
     FIRE_BTN.y = H_ - 100
-    print(string.format("[Input] 初始化 BT按钮:(%d,%d) Fire按钮:(%d,%d)",
+    print(string.format("[Input] 初始化 BT按钮:(%.0f,%.0f) Fire按钮:(%.0f,%.0f)",
         BT_BTN.x, BT_BTN.y, FIRE_BTN.x, FIRE_BTN.y))
 end
 

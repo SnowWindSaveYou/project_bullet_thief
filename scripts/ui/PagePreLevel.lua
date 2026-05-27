@@ -27,6 +27,7 @@ local difficultyMult_ = 1.0
 local btnRects_ = {}
 local startBtnRect_ = nil
 local bestiaryBtnRect_ = nil
+local practiceBtnRect_ = nil
 
 -- ═══ 动画状态 ═══
 local anim_ = {
@@ -40,6 +41,8 @@ local anim_ = {
     startScale  = 0,   -- 开始按钮缩放
     bestAlpha   = 0,   -- 图鉴按钮透明度
     bestScale   = 0,   -- 图鉴按钮缩放
+    practAlpha  = 0,   -- 练习按钮透明度
+    practScale  = 0,   -- 练习按钮缩放
 }
 
 -- 难度切换 bounce 动画
@@ -53,6 +56,7 @@ function M.init(W, H)
     btnRects_ = {}
     startBtnRect_ = nil
     bestiaryBtnRect_ = nil
+    practiceBtnRect_ = nil
 end
 
 function M.show(highScore)
@@ -69,6 +73,8 @@ function M.show(highScore)
     anim_.startScale = 0
     anim_.bestAlpha  = 0
     anim_.bestScale  = 0
+    anim_.practAlpha = 0
+    anim_.practScale = 0
 
     -- 取消之前的动画
     Tween.cancelTarget(anim_)
@@ -105,6 +111,12 @@ function M.show(highScore)
     -- BESTIARY 按钮
     Tween.to(anim_, { bestAlpha = 1, bestScale = 1 }, 0.35, {
         delay = 0.5,
+        easing = Tween.Easing.easeOutBack,
+    })
+
+    -- PRACTICE 按钮
+    Tween.to(anim_, { practAlpha = 1, practScale = 1 }, 0.35, {
+        delay = 0.58,
         easing = Tween.Easing.easeOutBack,
     })
 end
@@ -267,35 +279,73 @@ function M.draw(vg, W, H)
         nvgGlobalAlpha(vg, 1.0)
     end
 
-    -- BESTIARY 按钮
+    -- BESTIARY 和 PRACTICE 按钮（并排）
     if anim_.bestAlpha > 0.01 then
         nvgGlobalAlpha(vg, anim_.bestAlpha)
-        local bestiaryY = 285
+        local rowY = 285
 
-        -- 基于世界坐标检测 hover
+        -- BESTIARY 按钮（左侧）
+        local bestBtnX = panelW * 0.32
         local bestHov = bestiaryBtnRect_ and Components.isPointerInRect(
             bestiaryBtnRect_.x, bestiaryBtnRect_.y, bestiaryBtnRect_.w, bestiaryBtnRect_.h)
 
         nvgSave(vg)
         local bs = anim_.bestScale
-        nvgTranslate(vg, panelW * 0.5, bestiaryY)
+        nvgTranslate(vg, bestBtnX, rowY)
         nvgScale(vg, bs, bs)
-        nvgTranslate(vg, -panelW * 0.5, -bestiaryY)
+        nvgTranslate(vg, -bestBtnX, -rowY)
 
-        Components.drawButton(vg, panelW * 0.5, bestiaryY, "BESTIARY", {
+        Components.drawButton(vg, bestBtnX, rowY, "BESTIARY", {
             variant = "dark",
-            w = 120,
+            w = 110,
             hovered = bestHov,
         })
 
         nvgRestore(vg)
 
         -- 世界坐标
-        local worldBestY = (H * 0.5 + anim_.panelY) - panelH * 0.5 * scl + bestiaryY * scl
+        local worldBestY = (H * 0.5 + anim_.panelY) - panelH * 0.5 * scl + rowY * scl
+        local worldBestX = W * 0.5 - panelW * 0.5 * scl + bestBtnX * scl
         bestiaryBtnRect_ = {
-            x = W * 0.5 - 60 * scl,
+            x = worldBestX - 55 * scl,
             y = worldBestY - Theme.button.height * 0.5 * scl,
-            w = 120 * scl,
+            w = 110 * scl,
+            h = Theme.button.height * scl,
+        }
+
+        nvgGlobalAlpha(vg, 1.0)
+    end
+
+    -- PRACTICE 按钮（右侧）
+    if anim_.practAlpha > 0.01 then
+        nvgGlobalAlpha(vg, anim_.practAlpha)
+        local rowY = 285
+        local practBtnX = panelW * 0.68
+
+        local practHov = practiceBtnRect_ and Components.isPointerInRect(
+            practiceBtnRect_.x, practiceBtnRect_.y, practiceBtnRect_.w, practiceBtnRect_.h)
+
+        nvgSave(vg)
+        local ps = anim_.practScale
+        nvgTranslate(vg, practBtnX, rowY)
+        nvgScale(vg, ps, ps)
+        nvgTranslate(vg, -practBtnX, -rowY)
+
+        Components.drawButton(vg, practBtnX, rowY, "PRACTICE", {
+            variant = "dark",
+            w = 110,
+            hovered = practHov,
+        })
+
+        nvgRestore(vg)
+
+        -- 世界坐标
+        local worldPractY = (H * 0.5 + anim_.panelY) - panelH * 0.5 * scl + rowY * scl
+        local worldPractX = W * 0.5 - panelW * 0.5 * scl + practBtnX * scl
+        practiceBtnRect_ = {
+            x = worldPractX - 55 * scl,
+            y = worldPractY - Theme.button.height * 0.5 * scl,
+            w = 110 * scl,
             h = Theme.button.height * scl,
         }
 
@@ -333,6 +383,11 @@ function M.onClick(x, y)
     -- 图鉴
     if Components.hitTest(bestiaryBtnRect_, x, y) then
         return "bestiary"
+    end
+
+    -- 练习
+    if Components.hitTest(practiceBtnRect_, x, y) then
+        return "practice"
     end
 
     return nil

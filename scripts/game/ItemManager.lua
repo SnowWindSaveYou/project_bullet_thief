@@ -20,6 +20,8 @@ local DROP_CHANCE = {
     scout  = { coin = 0.35, energy = 0.15, heal = 0.05, magnet = 0.02 },
     heavy  = { coin = 0.25, energy = 0.20, heal = 0.12, magnet = 0.06 },
     sniper = { coin = 0.40, energy = 0.10, heal = 0.06, magnet = 0.03 },
+    laser  = { coin = 0.45, energy = 0.25, heal = 0.10, magnet = 0.05 },
+    boss   = { coin = 1.00, energy = 0.50, heal = 0.50, magnet = 0.30 },
 }
 
 function M.init(_W, _H)
