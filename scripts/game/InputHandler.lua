@@ -12,10 +12,10 @@ local M = {}
 
 local W_, H_ = 0, 0
 
--- 左侧区域：子弹时间按钮（左下角，半径 50）
-local BT_BTN = { x = 80, y = 0, r = 55 }  -- y 在 init 时设置
--- 右侧区域：发射按钮（右下角，半径 50）
-local FIRE_BTN = { x = 0, y = 0, r = 55 } -- x/y 在 init 时设置
+-- 左侧区域：子弹时间按钮（左下角）
+local BT_BTN = { x = 80, y = 0, r = 44 }  -- y 在 init 时设置
+-- 右侧区域：发射按钮（右下角）
+local FIRE_BTN = { x = 0, y = 0, r = 44 } -- x/y 在 init 时设置
 
 -- ——— 移动拖拽 ———
 local moveTouchId   = nil   -- 正在追踪的触摸 ID（移动）

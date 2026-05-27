@@ -322,69 +322,67 @@ end
 
 -- ═══════════════════════════════════════════
 -- 圆形动作按钮（HUD 用）
+-- opts.active: 按下状态
+-- opts.fillRatio: 能量/子弹比例 (0~1)
+-- opts.arcColor: 弧线颜色
+-- opts.icon: 图标句柄
+-- opts.disabled: 资源不足时为 true，按钮变半透明
 -- ═══════════════════════════════════════════
+
+-- 按钮按下缩放动画状态（按按钮标识存储）
+local btnScaleAnim_ = {}
+
 function M.drawCircleButton(vg, cx, cy, r, label, opts)
     opts = opts or {}
     local isActive = opts.active or false
+    local isDisabled = opts.disabled or false
     local fillRatio = opts.fillRatio or 0
     local cr, cg, cb = Theme.c(opts.arcColor or Theme.colors.energyCyan)
 
-    -- 阴影
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx + 2, cy + 3, r)
-    nvgFillColor(vg, nvgRGBAf(0, 0, 0, 0.25))
-    nvgFill(vg)
+    -- 按下放大动效：目标 1.2x，松开回 1.0x
+    local key = label or "btn"
+    if not btnScaleAnim_[key] then btnScaleAnim_[key] = 1.0 end
+    local targetScale = isActive and 1.2 or 1.0
+    -- 简单 lerp 平滑过渡
+    btnScaleAnim_[key] = btnScaleAnim_[key] + (targetScale - btnScaleAnim_[key]) * 0.25
+    local scale = btnScaleAnim_[key]
+    local drawR = r * scale
 
-    -- 背景（米黄）
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, r)
-    nvgFillColor(vg, nvgRGBAf(Theme.c(Theme.colors.panelBg)))
-    nvgFill(vg)
+    -- 整体透明度：资源不足时降低
+    local globalAlpha = isDisabled and 0.35 or 1.0
+
+    nvgSave(vg)
+    nvgGlobalAlpha(vg, globalAlpha)
 
     -- 能量弧
     if fillRatio > 0.01 then
         local arc = fillRatio * math.pi * 2
         nvgBeginPath(vg)
-        nvgArc(vg, cx, cy, r - 5, -math.pi * 0.5, -math.pi * 0.5 + arc, NVG_CW)
+        nvgArc(vg, cx, cy, drawR - 4, -math.pi * 0.5, -math.pi * 0.5 + arc, NVG_CW)
         local alpha = isActive and 1.0 or 0.7
         nvgStrokeColor(vg, nvgRGBAf(cr, cg, cb, alpha))
-        nvgStrokeWidth(vg, 4)
+        nvgStrokeWidth(vg, 3.5)
         nvgLineCap(vg, NVG_ROUND)
         nvgStroke(vg)
     end
 
-    -- 外描边
+    -- 外描边（保留边框）
     nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, r)
-    local bAlpha = isActive and 1.0 or 0.7
+    nvgCircle(vg, cx, cy, drawR)
+    local bAlpha = isActive and 1.0 or 0.6
     nvgStrokeColor(vg, nvgRGBAf(Theme.ca(Theme.colors.panelBorder, bAlpha)))
     nvgStrokeWidth(vg, isActive and 2.5 or 2.0)
     nvgStroke(vg)
 
-    -- Hover 高亮
-    if M.isPointerInCircle(cx, cy, r) then
-        nvgBeginPath(vg)
-        nvgCircle(vg, cx, cy, r)
-        nvgFillColor(vg, nvgRGBAf(1, 1, 1, 0.15))
-        nvgFill(vg)
-        -- 外环发光
-        nvgBeginPath(vg)
-        nvgCircle(vg, cx, cy, r + 2)
-        nvgStrokeColor(vg, nvgRGBAf(1, 1, 1, 0.20))
-        nvgStrokeWidth(vg, 2.0)
-        nvgStroke(vg)
-    end
-
-    -- 图标或文字标签
+    -- 图标或文字标签（无背景色，直接绘制贴图）
     if opts.icon and opts.icon > 0 then
-        -- 绘制图标（居中，铺满按钮内圈）
-        local iconSize = r * 1.3
+        local iconSize = drawR * 1.6
         local ix = cx - iconSize * 0.5
         local iy = cy - iconSize * 0.5
-        local iconAlpha = isActive and 1.0 or 0.8
+        local iconAlpha = isActive and 1.0 or 0.85
         local paint = nvgImagePattern(vg, ix, iy, iconSize, iconSize, 0, opts.icon, iconAlpha)
         nvgBeginPath(vg)
-        nvgCircle(vg, cx, cy, r - 6)
+        nvgCircle(vg, cx, cy, drawR - 4)
         nvgFillPaint(vg, paint)
         nvgFill(vg)
     else
@@ -394,6 +392,8 @@ function M.drawCircleButton(vg, cx, cy, r, label, opts)
         nvgFillColor(vg, nvgRGBAf(Theme.c(Theme.colors.titleText)))
         nvgText(vg, cx, cy, label)
     end
+
+    nvgRestore(vg)
 end
 
 -- ═══════════════════════════════════════════

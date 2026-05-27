@@ -64,7 +64,6 @@ function M.reset(_W, _H)
         -- 升级加成
         speedMult     = 1.0,
         orbitDamageMult = 1.0,
-        orbitSpeedMult = 1.0,
         energyRegenMult = 1.0,
         -- 视觉动画
         hitFlash      = 0,
@@ -140,7 +139,7 @@ function M.update(dt)
 
     -- 4. 轨道角度旋转
     data.orbitAngle = data.orbitAngle
-        + CFG.orbitAngularSpeed * data.orbitSpeedMult * dt
+        + CFG.orbitAngularSpeed * dt
 
     -- 5. 视觉动画衰减
     data.hitFlash = math.max(0, data.hitFlash - dt * 3.0)
@@ -207,6 +206,11 @@ end
 -- 获取当前发射方向（自动瞄准：近程锁敌，远程用移动方向）
 -- 返回 angle(弧度), lockedEnemy(table|nil)
 function M.getFireDirection()
+    -- 防御：Player 尚未初始化时返回默认方向
+    if not data.x then
+        return 0, nil
+    end
+
     local EnemyMgr = require("game.EnemyManager")
     local enemies = EnemyMgr.getEnemies()
 

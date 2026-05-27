@@ -1,5 +1,5 @@
 -- ============================================================================
--- UpgradeSystem.lua - 升级界面（每 150 轨道击杀触发 3选1）
+-- UpgradeSystem.lua - 升级界面（每 50 轨道击杀触发 3选1）
 -- 复古卡通桌游风格：米黄底面板 + 深蓝描边卡片 + 棋盘格选中态
 -- ============================================================================
 
@@ -9,8 +9,8 @@ local Components = require "ui.Components"
 
 local M = {}
 
--- 升级里程碑（每 150 击杀一次）
-local BASE_THRESHOLD = 150
+-- 升级里程碑（每 50 击杀一次）
+local BASE_THRESHOLD = 50
 local upgradeCount_  = 0
 local showing_       = false
 local cards_         = {}
@@ -33,17 +33,14 @@ local cardAnims_ = {}  -- { alpha, slideY, scale }
 local UPGRADE_POOL = {
     -- 轨道子弹强化
     { id = "orbit_dmg",     tree = "orbit",  name = "穿甲弹芯",   desc = "轨道子弹伤害 +1",            icon = "diamond", color = {0.3, 0.8, 1.0} },
-    { id = "orbit_speed",   tree = "orbit",  name = "超频转动",   desc = "轨道旋转速度 +30%",           icon = "orbit",   color = {0.3, 0.8, 1.0} },
     { id = "orbit_layers",  tree = "orbit",  name = "扩编轨道",   desc = "每圈最多子弹数 +4",           icon = "ring",    color = {0.3, 0.8, 1.0} },
     -- 子弹时间强化
     { id = "bt_regen",      tree = "bullet", name = "量子充能",   desc = "能量恢复速度 +40%",           icon = "bolt",    color = {0.8, 0.4, 1.0} },
     { id = "bt_cost",       tree = "bullet", name = "节能模式",   desc = "子弹时间能量消耗 -25%",       icon = "shield",  color = {0.8, 0.4, 1.0} },
     { id = "bt_graze",      tree = "bullet", name = "危险舞者",   desc = "擦弹能量获取 +50%",           icon = "star",    color = {0.8, 0.4, 1.0} },
     -- 通用
-    { id = "move_speed",    tree = "misc",   name = "疾步",       desc = "移动速度 +20%",               icon = "arrow",   color = {0.4, 1.0, 0.5} },
     { id = "hp_up",         tree = "misc",   name = "钢铁意志",   desc = "最大血量 +20",                icon = "heart",   color = {1.0, 0.4, 0.4} },
     { id = "hp_regen",      tree = "misc",   name = "生命脉动",   desc = "每次夺取子弹恢复 1 血量",    icon = "heal",    color = {1.0, 0.4, 0.4} },
-    { id = "ram_range",     tree = "misc",   name = "冲击波",     desc = "撞击扇形角扩大 +20°",         icon = "wave",    color = {0.4, 1.0, 0.5} },
 }
 
 local ownedUpgrades_ = {}
@@ -219,9 +216,7 @@ function M.applyUpgrade(u)
     table.insert(ownedUpgrades_, u.id)
 
     if u.id == "orbit_dmg"    then p.orbitDamage = (p.orbitDamage or 1) + 1
-    elseif u.id == "orbit_speed"  then p.orbitSpeedMult = (p.orbitSpeedMult or 1) * 1.3
     elseif u.id == "bt_regen"     then p.energyRegenMult = (p.energyRegenMult or 1) * 1.4
-    elseif u.id == "move_speed"   then p.speedMult = (p.speedMult or 1) * 1.2
     elseif u.id == "hp_up"        then
         p.maxHp = p.maxHp + 20
         p.hp    = math.min(p.maxHp, p.hp + 20)

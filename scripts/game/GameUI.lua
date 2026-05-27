@@ -495,22 +495,26 @@ function drawButtons(p)
 
     -- BT（闪避/子弹时间）按钮（左下）
     local btActive = InputH.isBulletTimeHeld()
+    local btDisabled = (p.energy or 0) < 0.05  -- 能量不足时变透明
     Comp.drawCircleButton(vg_, btBtn.x, btBtn.y, btBtn.r, "BT", {
         active    = btActive,
         fillRatio = p.energy,
         arcColor  = Theme.colors.energyCyan,
         icon      = iconDodge_,
+        disabled  = btDisabled,
     })
 
     -- FIRE（攻击）按钮（右下）
     local fireActive = InputH.isFireHeld()
     local BulletMgr = require("game.BulletManager")
     local orbitCount = #(BulletMgr.getOrbitBullets())
+    local fireDisabled = (orbitCount <= 0)  -- 没子弹时变透明
     Comp.drawCircleButton(vg_, fireBtn.x, fireBtn.y, fireBtn.r, "FIRE", {
         active    = fireActive,
         fillRatio = (orbitCount > 0) and 1.0 or 0.0,
         arcColor  = Theme.colors.accentYellow,
         icon      = iconAttack_,
+        disabled  = fireDisabled,
     })
 
     -- QTE 音游缩圈（在 FIRE 按钮上）
