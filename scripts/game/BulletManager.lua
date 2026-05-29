@@ -2,8 +2,11 @@
 -- BulletManager.lua - 子弹系统（敌方飞行子弹 + 轨道子弹）
 -- ============================================================================
 
-local Renderer = require "game.Renderer"
-local Pool     = require "lib.Pool"
+local Renderer      = require "game.Renderer"
+local Pool          = require "lib.Pool"
+local ShotHandler   = require "game.skills.ShotHandler"
+local OrbitModifier = require "game.skills.OrbitModifier"
+local QTEHandler    = require "game.skills.QTEHandler"
 
 local M = {}
 
@@ -33,12 +36,19 @@ local ORBIT_CFG = {
 function M.init(_W, _H)
     W_ = _W
     H_ = _H
+    ShotHandler.init()
+    OrbitModifier.init()
+    QTEHandler.init()
     M.reset()
 end
 
 function M.reset()
     bulletPool_:drain(bullets_)
     orbitPool_:drain(orbitBullets_)
+    ShotHandler.resetLaser()
+    OrbitModifier.resetPulse()
+    QTEHandler.resetBeam()
+    QTEHandler.clearHomingBullets()
 end
 
 function M.getBullets()
@@ -98,8 +108,31 @@ function M.spawnPlayerBullet(x, y, angle, speed, opts)
     b.stealT    = nil
     b.height    = nil
     b.vHeight   = nil
+    -- 清理射击形态字段（防止池复用残留）
+    b.pierce      = nil
+    b.pierceDecay = nil
+    b.endAoe      = nil
+    b.splash      = nil
+    b.splashCount = nil
+    b.splashDmgMult = nil
+    b.splashRadius  = nil
+    b.splashRange   = nil
+    b.splashChain   = nil
+    b.splashSlow    = nil
+    b.dmgMult       = nil
+    b.closeDmg      = nil
+    b.originX       = nil
+    b.originY       = nil
+    -- 应用射击形态修饰（穿透/溅射/散弹属性）
+    if not opts.skipShotMod then
+        ShotHandler.modifyBullet(b)
+    end
+    -- 散弹近距离加伤需要记录发射原点
+    if b.closeDmg then
+        b.originX = x
+        b.originY = y
+    end
     table.insert(bullets_, b)
-    print("[BulletMgr] 发射轨道子弹 angle=" .. string.format("%.2f", angle))
 end
 
 -- ——— 夺取子弹（变为轨道子弹） ———
@@ -125,6 +158,13 @@ function M.stealBullet(idx)
     -- 子弹时间内夺取的子弹，需等子弹时间结束后才可造成伤害
     ob.btShielded  = inBT or false
     ob.slotAngle   = 0
+    -- 清理轨道形态残留字段（池复用安全）
+    ob.bladeDurability = nil
+    ob.bladeDmgMult = nil
+    ob.shieldHP = nil
+    ob.shieldMax = nil
+    -- 应用轨道形态修饰（刀刃耐久/护盾值等）
+    OrbitModifier.modifyOrbitBullet(ob)
     table.insert(orbitBullets_, ob)
     -- 重新分配所有轨道子弹的位置
     M.reassignOrbitSlots()
@@ -290,6 +330,15 @@ function M.doFire(playerX, playerY, playerOrbitAngle, targetAngle, skipShielded)
     local tier = getFireTier()
     local perShot = tier.perShot
     local spread  = tier.spread
+    local speed   = FIRE_CFG.speed
+
+    -- A线射击形态覆盖（穿透/散弹可能改变参数）
+    local overrides = ShotHandler.getFireOverrides()
+    if overrides then
+        if overrides.perShot then perShot = overrides.perShot end
+        if overrides.spread then spread = overrides.spread end
+        if overrides.speed then speed = overrides.speed end
+    end
 
     for i = 1, perShot do
         if #orbitBullets_ == 0 then break end
@@ -299,7 +348,7 @@ function M.doFire(playerX, playerY, playerOrbitAngle, targetAngle, skipShielded)
             offset = (i - 1) / (perShot - 1) * 2 * spread - spread
         end
         local angle = targetAngle + offset
-        fireOneBullet(playerX, playerY, playerOrbitAngle, angle, FIRE_CFG.speed, skipShielded)
+        fireOneBullet(playerX, playerY, playerOrbitAngle, angle, speed, skipShielded)
     end
 end
 
@@ -308,6 +357,111 @@ function M.tryFireOrbit(playerX, playerY, playerOrbitAngle, targetAngle, speed)
     if #orbitBullets_ == 0 then return false end
     fireOneBullet(playerX, playerY, playerOrbitAngle, targetAngle, speed or FIRE_CFG.speed)
     return true
+end
+
+-- ——— QTE 爆发触发（按形态路由） ———
+function M._triggerQTEBurst(player)
+    local VFX = require("lib.VFX")
+    local EnemyMgr = require("game.EnemyManager")
+    local PlayerMod = require("game.Player")
+    local count = #orbitBullets_
+    local dmgMult = QTEHandler.calcDmgMult(count)
+    qteState_.burstDmgMult = dmgMult
+    qteState_.active = false
+    qteState_.flashAlpha = 1.0
+    VFX.triggerShake(8, 0.3)
+
+    local formId = QTEHandler.getFormId()
+    print("[BulletMgr] QTE 成功! 形态=" .. formId .. " count=" .. count .. " dmgMult=" .. string.format("%.2f", dmgMult))
+
+    if formId == "beam" then
+        -- ═══ 光束形态：所有轨道弹融合为一道光束 ═══
+        local fa, _ = PlayerMod.getFireDirection()
+        local avgDmg = 0
+        for _, ob in ipairs(orbitBullets_) do avgDmg = avgDmg + (ob.damage or 1) end
+        avgDmg = avgDmg / math.max(1, count)
+
+        local beamResult = QTEHandler.fireBeam(player.x, player.y, fa, count, avgDmg)
+        -- 存储光束结果供 main.lua 碰撞检测
+        M._lastBeamResult = beamResult
+
+        -- 清空所有轨道弹
+        for i = #orbitBullets_, 1, -1 do
+            orbitPool_:release(orbitBullets_[i])
+            table.remove(orbitBullets_, i)
+        end
+        M.reassignOrbitSlots()
+        VFX.triggerShake(12, 0.4)
+
+    elseif formId == "radial" then
+        -- ═══ 星坠形态：360° 全方向同时爆发 ═══
+        local angles, radialOpts = QTEHandler.calcRadialAngles(count)
+        qteState_.burstQueue = angles
+        qteState_.bursting = true
+        qteState_.burstTimer = 0
+        qteState_.radialOpts = radialOpts
+
+    elseif formId == "homing" then
+        -- ═══ 群星追踪形态：生成追踪弹 ═══
+        local enemies = EnemyMgr.getEnemies()
+        local liveEnemies = {}
+        for _, e in ipairs(enemies) do
+            if not e.dead then table.insert(liveEnemies, e) end
+        end
+        -- 按距离排序
+        table.sort(liveEnemies, function(a, b)
+            local da = (a.x - player.x)^2 + (a.y - player.y)^2
+            local db = (b.x - player.x)^2 + (b.y - player.y)^2
+            return da < db
+        end)
+
+        for i = #orbitBullets_, 1, -1 do
+            local ob = orbitBullets_[i]
+            local bx, by = ob.x, ob.y
+            if not ob.collecting then
+                bx, by = M.getOrbitBulletPos(ob, player.x, player.y, player.orbitAngle)
+            end
+            -- 分配目标（循环）
+            local target = nil
+            if #liveEnemies > 0 then
+                local tIdx = ((#orbitBullets_ - i) % #liveEnemies) + 1
+                target = liveEnemies[tIdx]
+            end
+            local angle = target and math.atan(target.y - by, target.x - bx) or (math.random() * math.pi * 2)
+            local dmg = math.floor((ob.damage or 1) * dmgMult)
+            QTEHandler.spawnHomingBullet(bx, by, angle, dmg, target)
+            orbitPool_:release(ob)
+            table.remove(orbitBullets_, i)
+        end
+        M.reassignOrbitSlots()
+
+    else
+        -- ═══ 默认形态：自动瞄准连射 ═══
+        local enemies = EnemyMgr.getEnemies()
+        local targets = {}
+        for _, e in ipairs(enemies) do
+            if not e.dead then
+                local dx = e.x - player.x
+                local dy = e.y - player.y
+                table.insert(targets, { angle = math.atan(dy, dx), dist = dx*dx + dy*dy })
+            end
+        end
+        table.sort(targets, function(a, b) return a.dist < b.dist end)
+
+        qteState_.burstQueue = {}
+        local fa, _ = PlayerMod.getFireDirection()
+        for i = 1, count do
+            if #targets > 0 then
+                local tIdx = ((i - 1) % #targets) + 1
+                table.insert(qteState_.burstQueue, targets[tIdx].angle)
+            else
+                local spread = (i - 1) / math.max(1, count - 1) * 0.8 - 0.4
+                table.insert(qteState_.burstQueue, fa + spread)
+            end
+        end
+        qteState_.bursting = true
+        qteState_.burstTimer = 0
+    end
 end
 
 -- ——— 更新 ———
@@ -408,6 +562,20 @@ function M.update(dt, realDt)
         end
     end
 
+    -- ——— 轨道形态更新（脉冲/护盾再生） ———
+    OrbitModifier.updateShieldRegen(realDt, orbitBullets_)
+    local pulseHit = OrbitModifier.updatePulse(realDt, #orbitBullets_, player.x, player.y)
+    if pulseHit and pulseHit.cost > 0 and #orbitBullets_ > 0 then
+        -- 脉冲消耗轨道弹
+        for _ = 1, math.min(pulseHit.cost, #orbitBullets_) do
+            orbitPool_:release(orbitBullets_[#orbitBullets_])
+            table.remove(orbitBullets_, #orbitBullets_)
+        end
+        M.reassignOrbitSlots()
+    end
+    -- pulseHit 存储在模块级变量供 main.lua 碰撞检测读取
+    M._lastPulseHit = pulseHit
+
     -- ——— QTE 全弹爆发系统 ———
     local InputH = require("game.InputHandler")
     local PlayerMod = require("game.Player")
@@ -419,12 +587,16 @@ function M.update(dt, realDt)
     if wasBTActive_ and not btActive then
         -- BT 刚结束，且轨道有子弹时才触发 QTE
         if #orbitBullets_ > 0 then
-            qteState_.active = true
-            qteState_.timer  = QTE_CFG.window
-            qteState_.flashAlpha = 0
-            -- 如果此时已经按住发射键，必须先松手再按才算（提前按不算）
-            qteState_.needRelease = fireHeld
-            print("[BulletMgr] QTE 窗口开启, 轨道弹数=" .. #orbitBullets_ .. " needRelease=" .. tostring(fireHeld))
+            -- 自动触发（默认形态 Lv5）：跳过窗口直接爆发
+            if QTEHandler.isAutoTrigger() then
+                M._triggerQTEBurst(player)
+            else
+                qteState_.active = true
+                qteState_.timer  = QTEHandler.getWindow()
+                qteState_.flashAlpha = 0
+                qteState_.needRelease = fireHeld
+                print("[BulletMgr] QTE 窗口开启, 形态=" .. QTEHandler.getFormId() .. " 轨道弹数=" .. #orbitBullets_)
+            end
         end
     end
     wasBTActive_ = btActive
@@ -440,65 +612,24 @@ function M.update(dt, realDt)
             end
         end
 
-        -- 玩家在窗口内按下发射 → 触发全弹爆发（必须是松手后的新按下）
+        -- 玩家在窗口内按下发射 → 触发全弹爆发
         local qteAccept = justPressed and not qteState_.needRelease
         if qteAccept then
-            -- 计算伤害倍率：基础 + 数量加成
-            local count = #orbitBullets_
-            qteState_.burstDmgMult = QTE_CFG.baseDmgMult + count * QTE_CFG.countBonus
-
-            -- 为每颗子弹分配发射目标角度（自动瞄准多个敌人）
-            local EnemyMgr = require("game.EnemyManager")
-            local enemies = EnemyMgr.getEnemies()
-            local targets = {}
-            -- 收集存活敌人角度
-            for _, e in ipairs(enemies) do
-                if not e.dead then
-                    local dx = e.x - player.x
-                    local dy = e.y - player.y
-                    table.insert(targets, { angle = math.atan(dy, dx), dist = dx*dx + dy*dy })
-                end
-            end
-            -- 按距离排序
-            table.sort(targets, function(a, b) return a.dist < b.dist end)
-
-            -- 为每颗子弹分配角度
-            qteState_.burstQueue = {}
-            local fa, _ = PlayerMod.getFireDirection()
-            for i = 1, count do
-                if #targets > 0 then
-                    -- 循环分配目标（子弹多于敌人时复用）
-                    local tIdx = ((i - 1) % #targets) + 1
-                    table.insert(qteState_.burstQueue, targets[tIdx].angle)
-                else
-                    -- 无敌人时扇形散射
-                    local spread = (i - 1) / math.max(1, count - 1) * 0.8 - 0.4
-                    table.insert(qteState_.burstQueue, fa + spread)
-                end
-            end
-
-            qteState_.bursting = true
-            qteState_.burstTimer = 0
-            qteState_.active = false
-            qteState_.flashAlpha = 1.0  -- 闪白
-            -- 震屏
-            local VFX = require("lib.VFX")
-            VFX.triggerShake(8, 0.3)
-            print("[BulletMgr] QTE 成功! 全弹爆发 count=" .. count .. " dmgMult=" .. string.format("%.2f", qteState_.burstDmgMult))
+            M._triggerQTEBurst(player)
         elseif qteState_.timer <= 0 then
-            -- 超时，QTE 失败，子弹留在轨道正常使用
             qteState_.active = false
             print("[BulletMgr] QTE 超时，窗口关闭")
         end
     end
 
-    -- 执行爆发连射
+    -- 执行爆发连射（default / radial 模式使用 burstQueue）
     if qteState_.bursting then
         qteState_.burstTimer = qteState_.burstTimer - realDt
+        local burstDelay = QTEHandler.getBurstDelay()
         while qteState_.burstTimer <= 0 and #qteState_.burstQueue > 0 and #orbitBullets_ > 0 do
             local angle = table.remove(qteState_.burstQueue, 1)
             local dmgMult = qteState_.burstDmgMult
-            -- 取最近的轨道子弹发射（高速 + 伤害加成）
+            -- 取最近的轨道子弹发射
             local bestIdx = nil
             local bestDiff = math.huge
             for i, ob in ipairs(orbitBullets_) do
@@ -511,7 +642,6 @@ function M.update(dt, realDt)
                     end
                 end
             end
-            -- collecting 的也可以发射
             if not bestIdx then
                 for i, ob in ipairs(orbitBullets_) do
                     local bAngle = math.atan(ob.y - player.y, ob.x - player.x)
@@ -528,22 +658,32 @@ function M.update(dt, realDt)
                 if not ob.collecting then
                     bx, by = M.getOrbitBulletPos(ob, player.x, player.y, player.orbitAngle)
                 end
-                -- 爆发子弹：高速 + 伤害加成
-                local burstSpeed = FIRE_CFG.speed * QTE_CFG.speedMult
+                local burstSpeed = FIRE_CFG.speed * QTEHandler.getSpeedMult()
                 local opts = { damage = math.floor((ob.damage or 1) * dmgMult), radius = 9 }
+                -- 星坠爆炸弹标记
+                if qteState_.radialOpts and qteState_.radialOpts.explodeOnHit then
+                    opts.endAoe = true
+                    opts.splash = false  -- 不走 splash 逻辑
+                    opts.radialExplode = true
+                    opts.radialRadius = qteState_.radialOpts.explodeRadius or 30
+                end
                 M.spawnPlayerBullet(bx, by, angle, burstSpeed, opts)
                 orbitPool_:release(ob)
                 table.remove(orbitBullets_, bestIdx)
                 M.reassignOrbitSlots()
             end
-            qteState_.burstTimer = qteState_.burstTimer + QTE_CFG.burstDelay
+            qteState_.burstTimer = qteState_.burstTimer + burstDelay
         end
         -- 爆发结束
         if #qteState_.burstQueue == 0 or #orbitBullets_ == 0 then
             qteState_.bursting = false
             qteState_.burstQueue = {}
+            qteState_.radialOpts = nil
         end
     end
+
+    -- 更新 QTEHandler 光束视觉和追踪弹
+    QTEHandler.updateBeamVisual(realDt)
 
     -- 闪白衰减
     if qteState_.flashAlpha > 0 then
@@ -553,18 +693,183 @@ function M.update(dt, realDt)
     -- 处理常规发射（QTE 窗口/爆发期间禁止常规发射）
     fireCooldown_ = fireCooldown_ - dt
     if not qteState_.active and not qteState_.bursting then
-        if fireHeld and #orbitBullets_ > 0 then
-            if justPressed or fireCooldown_ <= 0 then
-                local fireAngle, _ = PlayerMod.getFireDirection()
-                -- BT 期间跳过 btShielded 子弹（保留给 QTE 爆发）
-                M.doFire(player.x, player.y, player.orbitAngle, fireAngle, btActive)
-                local tier = getFireTier()
-                fireCooldown_ = tier.interval
+        -- ——— 激光模式特殊处理 ———
+        if ShotHandler.isLaserMode() then
+            local fireAngle, _ = PlayerMod.getFireDirection()
+            if fireHeld and #orbitBullets_ > 0 then
+                -- 按住 → 蓄力
+                if not ShotHandler.getLaserState().charging then
+                    ShotHandler.laserChargeStart()
+                end
+                ShotHandler.laserChargeUpdate(realDt, #orbitBullets_)
+            elseif ShotHandler.getLaserState().charging then
+                -- 松开 → 释放激光
+                local consumed = ShotHandler.laserRelease(fireAngle)
+                if consumed > 0 then
+                    -- 从轨道中移除对应数量子弹
+                    for _ = 1, consumed do
+                        if #orbitBullets_ > 0 then
+                            orbitPool_:release(orbitBullets_[#orbitBullets_])
+                            table.remove(orbitBullets_, #orbitBullets_)
+                        end
+                    end
+                    M.reassignOrbitSlots()
+                    local VFX = require("lib.VFX")
+                    VFX.triggerShake(4, 0.2)
+                end
             end
+            -- 激光发射中持续更新
+            ShotHandler.laserFireUpdate(realDt)
         else
-            fireCooldown_ = 0
+            -- ——— 常规发射 ———
+            if fireHeld and #orbitBullets_ > 0 then
+                if justPressed or fireCooldown_ <= 0 then
+                    local fireAngle, _ = PlayerMod.getFireDirection()
+                    -- BT 期间跳过 btShielded 子弹（保留给 QTE 爆发）
+                    M.doFire(player.x, player.y, player.orbitAngle, fireAngle, btActive)
+                    -- 射击冷却：使用形态覆盖或默认档位
+                    local overrides = ShotHandler.getFireOverrides()
+                    if overrides and overrides.interval then
+                        fireCooldown_ = overrides.interval
+                    else
+                        local tier = getFireTier()
+                        fireCooldown_ = tier.interval
+                    end
+                end
+            else
+                fireCooldown_ = 0
+            end
         end
     end
+end
+
+-- ——— 激光碰撞查询（供 main.lua 碰撞检测调用） ———
+-- 返回激光信息 { active, x1,y1, x2,y2, width, dps, dir } 或 nil
+function M.getPlayerLaser()
+    local ls = ShotHandler.getLaserState()
+    if not ls.firing then return nil end
+    local player = require("game.Player").getData()
+    local len = 800  -- 激光长度（足够贯穿屏幕）
+    local x1 = player.x
+    local y1 = player.y
+    local x2 = x1 + math.cos(ls.fireDir) * len
+    local y2 = y1 + math.sin(ls.fireDir) * len
+    return {
+        active = true,
+        x1 = x1, y1 = y1,
+        x2 = x2, y2 = y2,
+        width = ls.width,
+        dps   = ls.dps,
+        dir   = ls.fireDir,
+    }
+end
+
+-- ——— 激光蓄力/发射绘制 ———
+function M.drawPlayerLaser(vg)
+    local ls = ShotHandler.getLaserState()
+    local player = require("game.Player").getData()
+
+    -- 蓄力指示（充能中显示渐粗光线预览）
+    if ls.charging and ls.charged > 0 then
+        local PlayerMod = require("game.Player")
+        local dir, _ = PlayerMod.getFireDirection()
+        local previewW = 2 + (ls.charged / 10) * 12
+        local len = 600
+        local x1 = player.x
+        local y1 = player.y
+        local x2 = x1 + math.cos(dir) * len
+        local y2 = y1 + math.sin(dir) * len
+        nvgLineCap(vg, NVG_ROUND)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, x1, y1)
+        nvgLineTo(vg, x2, y2)
+        nvgStrokeColor(vg, nvgRGBAf(0.4, 0.8, 1.0, 0.3 + ls.charged * 0.04))
+        nvgStrokeWidth(vg, previewW)
+        nvgStroke(vg)
+    end
+
+    -- 激光发射中
+    if ls.firing then
+        local len = 800
+        local x1 = player.x
+        local y1 = player.y
+        local x2 = x1 + math.cos(ls.fireDir) * len
+        local y2 = y1 + math.sin(ls.fireDir) * len
+        local w = ls.width
+        local progress = 1.0 - (ls.fireTimer / ls.duration)
+        -- 闪烁效果
+        local flicker = 0.9 + 0.1 * math.sin(drawTime_ * 40)
+
+        -- 外层光晕
+        nvgLineCap(vg, NVG_ROUND)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, x1, y1)
+        nvgLineTo(vg, x2, y2)
+        nvgStrokeColor(vg, nvgRGBAf(0.3, 0.7, 1.0, 0.3 * flicker))
+        nvgStrokeWidth(vg, w * 2.0)
+        nvgStroke(vg)
+
+        -- 主体
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, x1, y1)
+        nvgLineTo(vg, x2, y2)
+        nvgStrokeColor(vg, nvgRGBAf(0.6, 0.95, 1.0, 0.85 * flicker))
+        nvgStrokeWidth(vg, w)
+        nvgStroke(vg)
+
+        -- 核心白线
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, x1, y1)
+        nvgLineTo(vg, x2, y2)
+        nvgStrokeColor(vg, nvgRGBAf(1.0, 1.0, 1.0, 0.9 * flicker))
+        nvgStrokeWidth(vg, w * 0.3)
+        nvgStroke(vg)
+    end
+end
+
+-- ——— 轨道形态查询接口（供外部碰撞检测） ———
+function M.getOrbitModifier()
+    return OrbitModifier
+end
+
+function M.getQTEHandler()
+    return QTEHandler
+end
+
+--- 获取上一帧脉冲触发信息（用于 main.lua 应用脉冲伤害）
+function M.getLastPulseHit()
+    return M._lastPulseHit
+end
+
+--- 获取光束结果（一次性消费：读取后清空）
+function M.consumeBeamResult()
+    local r = M._lastBeamResult
+    M._lastBeamResult = nil
+    return r
+end
+
+-- ——— 脉冲波绘制 ———
+function M.drawPulseWave(vg)
+    local ps = OrbitModifier.getPulseState()
+    if not ps.pulsing or ps.radius <= 0 then return end
+
+    local player = require("game.Player").getData()
+    local r = ps.radius
+    local alpha = 0.6 * (1.0 - ps.pulseT / 0.5)  -- 随扩张衰减
+    alpha = math.max(0, alpha)
+
+    -- 外圈
+    nvgBeginPath(vg)
+    nvgCircle(vg, player.x, player.y, r)
+    nvgStrokeColor(vg, nvgRGBAf(0.3, 0.9, 1.0, alpha))
+    nvgStrokeWidth(vg, 3.0)
+    nvgStroke(vg)
+
+    -- 内填充
+    nvgBeginPath(vg)
+    nvgCircle(vg, player.x, player.y, r)
+    nvgFillColor(vg, nvgRGBAf(0.3, 0.9, 1.0, alpha * 0.15))
+    nvgFill(vg)
 end
 
 -- ——— 绘制 ———
@@ -639,7 +944,7 @@ function M.draw(vg)
 
     -- QTE 窗口提示：音游风格缩圈（圆环从大向小收缩）
     if qteState_.active then
-        local progress = 1.0 - (qteState_.timer / QTE_CFG.window)  -- 0→1
+        local progress = 1.0 - (qteState_.timer / QTEHandler.getWindow())  -- 0→1
         -- 缩圈：从大半径收缩到玩家半径
         local maxR = player.radius + 80
         local minR = player.radius + 4
@@ -687,6 +992,12 @@ function M.drawQTEFlash(vg, w, h)
         nvgFillColor(vg, nvgRGBAf(1.0, 1.0, 1.0, qteState_.flashAlpha * 0.5))
         nvgFill(vg)
     end
+end
+
+-- QTE 光束/追踪弹特效绘制
+function M.drawQTEEffects(vg)
+    QTEHandler.drawBeam(vg)
+    QTEHandler.drawHomingBullets(vg)
 end
 
 function drawBullet(vg, b)

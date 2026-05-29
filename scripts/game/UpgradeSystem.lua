@@ -3,9 +3,10 @@
 -- 复古卡通桌游风格：米黄底面板 + 深蓝描边卡片 + 棋盘格选中态
 -- ============================================================================
 
-local Tween     = require "lib.Tween"
-local Theme     = require "ui.Theme"
+local Tween      = require "lib.Tween"
+local Theme      = require "ui.Theme"
 local Components = require "ui.Components"
+local SkillState = require "game.SkillState"
 
 local M = {}
 
@@ -50,8 +51,163 @@ local TREE_COLORS = {
     orbit  = Theme.colors.energyCyan,
     bullet = { 0.70, 0.40, 0.90, 1.0 },
     misc   = Theme.colors.accentGreen,
+    -- 成长线颜色
+    skill_a = { 1.00, 0.70, 0.20, 1.0 },  -- A线: 金色
+    skill_b = { 0.30, 1.00, 0.60, 1.0 },  -- B线: 绿色
+    skill_c = { 1.00, 0.40, 0.50, 1.0 },  -- C线: 红粉
+    skill_d = { 0.40, 0.70, 1.00, 1.0 },  -- D线: 蓝色
 }
-local TREE_NAMES = { orbit = "ORBIT", bullet = "BULLET TIME", misc = "UTILITY" }
+local TREE_NAMES = {
+    orbit = "ORBIT", bullet = "BULLET TIME", misc = "UTILITY",
+    skill_a = "A·COMBAT", skill_b = "B·STEAL", skill_c = "C·MINE", skill_d = "D·LINK",
+}
+
+-- ——— 成长线升级描述 ———
+local SKILL_DESCS = {
+    shot  = { "射击伤害+20%", "射击伤害+20%, 射速+15%", "射击伤害+30%, 射速+15%", "射击伤害+40%, 射速+30%" },
+    orbit = { "轨道伤害+20%", "轨道伤害+20%, 范围+10%", "轨道伤害+30%, 范围+20%", "轨道最终形态" },
+    qte   = { "QTE伤害+25%", "QTE伤害+25%, 时间+1s", "QTE伤害+35%, 时间+1s", "QTE最终形态" },
+    steal = { "偷取范围 +20%", "子弹减速 85%", "子弹偏转吸引" },
+    mine  = { "更多地雷, 加速放置", "扩大触发范围", "连锁引爆", "减速敌人", "滞留伤害区域" },
+    link  = { "更多节点, 延长持续", "扩大连接距离", "减速穿越敌人", "连锁伤害加成", "击杀爆裂传导" },
+}
+
+--- 根据当前 SkillState 生成可用的技能升级选项
+local function buildSkillPool()
+    local pool = {}
+
+    -- A线: shot/orbit/qte 等级提升
+    local axes = { "shot", "orbit", "qte" }
+    local axisNames = { shot = "射击", orbit = "轨道", qte = "QTE" }
+    local axisIcons = { shot = "arrow", orbit = "ring", qte = "bolt" }
+    for _, axis in ipairs(axes) do
+        local lv = SkillState.getLevel(axis)
+        local maxLv = SkillState.MAX_LEVELS[axis]
+        if lv < maxLv then
+            local nextLv = lv + 1
+            local desc = SKILL_DESCS[axis][lv] or (axisNames[axis] .. " Lv" .. nextLv)
+            pool[#pool + 1] = {
+                id = "skill_" .. axis .. "_lv",
+                tree = "skill_a",
+                name = axisNames[axis] .. " Lv" .. nextLv,
+                desc = desc,
+                icon = axisIcons[axis],
+                color = TREE_COLORS.skill_a,
+                skillAxis = axis,
+                skillAction = "levelup",
+            }
+        end
+    end
+
+    -- A线: 形态切换（仅当等级 >= 2 时提供）
+    local formAxes = { "shot", "orbit", "qte" }
+    local formNames = { shot = "射击形态", orbit = "轨道形态", qte = "QTE形态" }
+    for _, axis in ipairs(formAxes) do
+        local lv = SkillState.getLevel(axis)
+        local curForm = SkillState.getForm(axis)
+        local maxForm = SkillState.MAX_FORMS[axis]
+        if lv >= 2 and curForm < maxForm then
+            local nextForm = curForm + 1
+            local formName = SkillState.getFormName(axis, nextForm)
+            pool[#pool + 1] = {
+                id = "skill_" .. axis .. "_form",
+                tree = "skill_a",
+                name = formNames[axis] .. "·" .. formName,
+                desc = "解锁" .. axisNames[axis] .. "新形态: " .. formName,
+                icon = "diamond",
+                color = TREE_COLORS.skill_a,
+                skillAxis = axis,
+                skillAction = "formup",
+            }
+        end
+    end
+
+    -- B线: steal 解锁/升级
+    local stealLv = SkillState.getLevel("steal")
+    local stealMax = SkillState.MAX_LEVELS.steal
+    if stealLv == 0 then
+        pool[#pool + 1] = {
+            id = "skill_steal_unlock",
+            tree = "skill_b",
+            name = "解锁·偷取强化",
+            desc = "解锁B线: 子弹时间偷取范围+20%",
+            icon = "wave",
+            color = TREE_COLORS.skill_b,
+            skillAxis = "steal",
+            skillAction = "levelup",
+        }
+    elseif stealLv < stealMax then
+        local desc = SKILL_DESCS.steal[stealLv] or ("偷取 Lv" .. (stealLv + 1))
+        pool[#pool + 1] = {
+            id = "skill_steal_lv",
+            tree = "skill_b",
+            name = "偷取 Lv" .. (stealLv + 1),
+            desc = desc,
+            icon = "wave",
+            color = TREE_COLORS.skill_b,
+            skillAxis = "steal",
+            skillAction = "levelup",
+        }
+    end
+
+    -- C线: mine 解锁/升级
+    local mineLv = SkillState.getLevel("mine")
+    local mineMax = SkillState.MAX_LEVELS.mine
+    if mineLv == 0 then
+        pool[#pool + 1] = {
+            id = "skill_mine_unlock",
+            tree = "skill_c",
+            name = "解锁·梦境诡雷",
+            desc = "解锁C线: 移动时自动布置地雷",
+            icon = "diamond",
+            color = TREE_COLORS.skill_c,
+            skillAxis = "mine",
+            skillAction = "levelup",
+        }
+    elseif mineLv < mineMax then
+        local desc = SKILL_DESCS.mine[mineLv] or ("地雷 Lv" .. (mineLv + 1))
+        pool[#pool + 1] = {
+            id = "skill_mine_lv",
+            tree = "skill_c",
+            name = "诡雷 Lv" .. (mineLv + 1),
+            desc = desc,
+            icon = "diamond",
+            color = TREE_COLORS.skill_c,
+            skillAxis = "mine",
+            skillAction = "levelup",
+        }
+    end
+
+    -- D线: link 解锁/升级
+    local linkLv = SkillState.getLevel("link")
+    local linkMax = SkillState.MAX_LEVELS.link
+    if linkLv == 0 then
+        pool[#pool + 1] = {
+            id = "skill_link_unlock",
+            tree = "skill_d",
+            name = "解锁·梦境连线",
+            desc = "解锁D线: 击杀留下梦痕连线伤敌",
+            icon = "bolt",
+            color = TREE_COLORS.skill_d,
+            skillAxis = "link",
+            skillAction = "levelup",
+        }
+    elseif linkLv < linkMax then
+        local desc = SKILL_DESCS.link[linkLv] or ("连线 Lv" .. (linkLv + 1))
+        pool[#pool + 1] = {
+            id = "skill_link_lv",
+            tree = "skill_d",
+            name = "连线 Lv" .. (linkLv + 1),
+            desc = desc,
+            icon = "bolt",
+            color = TREE_COLORS.skill_d,
+            skillAxis = "link",
+            skillAction = "levelup",
+        }
+    end
+
+    return pool
+end
 
 function M.init()
     upgradeCount_   = 0
@@ -76,7 +232,11 @@ function M.setSize(_W, _H)
 end
 
 function M.getNextThreshold()
-    return BASE_THRESHOLD * (upgradeCount_ + 1)
+    -- 开场 25 击杀时额外触发一次，之后按 50 递增（75, 125, 175...）
+    if upgradeCount_ == 0 then
+        return 25
+    end
+    return 25 + BASE_THRESHOLD * upgradeCount_
 end
 
 function M.isShowing()
@@ -107,19 +267,59 @@ function M.show()
         easing = Tween.Easing.easeOutBack,
     })
 
-    -- 从池中随机选 3 个不重复
-    local available = {}
+    -- 混合池: 静态通用 + 动态成长线
+    local skillPool = buildSkillPool()
+    local staticPool = {}
     for _, u in ipairs(UPGRADE_POOL) do
-        table.insert(available, u)
+        staticPool[#staticPool + 1] = u
     end
 
     -- Fisher-Yates 洗牌
-    for i = #available, 2, -1 do
-        local j = math.random(1, i)
-        available[i], available[j] = available[j], available[i]
+    local function shuffle(t)
+        for i = #t, 2, -1 do
+            local j = math.random(1, i)
+            t[i], t[j] = t[j], t[i]
+        end
+    end
+    shuffle(skillPool)
+    shuffle(staticPool)
+
+    -- 策略: 保证至少 1 个技能升级（如果有），剩余从静态池补充
+    local chosen = {}
+    local usedIds = {}
+
+    -- 先放入 1-2 个技能升级（如果有的话）
+    local skillCount = math.min(2, #skillPool)
+    for i = 1, skillCount do
+        chosen[#chosen + 1] = skillPool[i]
+        usedIds[skillPool[i].id] = true
     end
 
+    -- 从静态池补到 3 个
+    local idx = 1
+    while #chosen < 3 and idx <= #staticPool do
+        if not usedIds[staticPool[idx].id] then
+            chosen[#chosen + 1] = staticPool[idx]
+            usedIds[staticPool[idx].id] = true
+        end
+        idx = idx + 1
+    end
+
+    -- 如果技能池不够且静态也不够，再从技能池补
+    idx = skillCount + 1
+    while #chosen < 3 and idx <= #skillPool do
+        if not usedIds[skillPool[idx].id] then
+            chosen[#chosen + 1] = skillPool[idx]
+            usedIds[skillPool[idx].id] = true
+        end
+        idx = idx + 1
+    end
+
+    -- 最终洗牌展示顺序
+    shuffle(chosen)
+
     -- 取前 3，每张卡片带独立动画
+    local available = chosen
     cardAnims_ = {}
     local count = math.min(3, #available)
     for i = 1, count do
@@ -215,13 +415,29 @@ function M.applyUpgrade(u)
     local p = Player.getData()
     table.insert(ownedUpgrades_, u.id)
 
+    -- 成长线技能升级
+    if u.skillAxis and u.skillAction then
+        if u.skillAction == "levelup" then
+            SkillState.levelUp(u.skillAxis)
+            print("[Upgrade] 技能升级: " .. u.skillAxis .. " -> Lv" .. SkillState.getLevel(u.skillAxis))
+        elseif u.skillAction == "formup" then
+            SkillState.nextForm(u.skillAxis)
+            print("[Upgrade] 形态切换: " .. u.skillAxis .. " -> Form " .. SkillState.getForm(u.skillAxis) .. " (" .. SkillState.getFormName(u.skillAxis) .. ")")
+        end
+        return
+    end
+
+    -- 通用升级
     if u.id == "orbit_dmg"    then p.orbitDamage = (p.orbitDamage or 1) + 1
+    elseif u.id == "orbit_layers" then p.maxOrbitBullets = (p.maxOrbitBullets or 12) + 4
     elseif u.id == "bt_regen"     then p.energyRegenMult = (p.energyRegenMult or 1) * 1.4
+    elseif u.id == "bt_cost"      then p.energyCostMult = (p.energyCostMult or 1) * 0.75
+    elseif u.id == "bt_graze"     then p.grazeEnergyMult = (p.grazeEnergyMult or 1) * 1.5
     elseif u.id == "hp_up"        then
         p.maxHp = p.maxHp + 20
         p.hp    = math.min(p.maxHp, p.hp + 20)
+    elseif u.id == "hp_regen"     then p.stealHeal = (p.stealHeal or 0) + 1
     end
-    -- 其他效果后续扩展
 end
 
 -- ═══════════════════════════════════════════

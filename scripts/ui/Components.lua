@@ -411,4 +411,173 @@ function M.hitTestCircle(cx, cy, r, x, y)
     return (dx * dx + dy * dy) <= r * r
 end
 
+-- ═══════════════════════════════════════════
+-- 下拉菜单 (Dropdown)
+-- state: { open=bool, selectedIdx=int, items={"label",...} }
+-- 返回 { triggerRect, itemRects={...} } 用于点击检测
+-- ═══════════════════════════════════════════
+function M.drawDropdown(vg, x, y, w, h, state, opts)
+    opts = opts or {}
+    local cr = 5
+    local items = state.items or {}
+    local selIdx = state.selectedIdx or 1
+    local label = items[selIdx] or "—"
+    local isOpen = state.open or false
+    local accentColor = opts.accentColor or Theme.colors.energyCyan
+
+    -- Trigger 按钮
+    local isHover = M.isPointerInRect(x, y, w, h)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, x, y, w, h, cr)
+    if isHover and not isOpen then
+        nvgFillColor(vg, nvgRGBAf(0.28, 0.34, 0.48, 1.0))
+    else
+        nvgFillColor(vg, nvgRGBAf(0.22, 0.27, 0.38, 1.0))
+    end
+    nvgFill(vg)
+    nvgStrokeColor(vg, nvgRGBAf(Theme.ca(accentColor, isOpen and 0.9 or 0.5)))
+    nvgStrokeWidth(vg, 1.2)
+    nvgStroke(vg)
+
+    -- 当前选中文字
+    nvgFontFace(vg, Theme.font.family)
+    nvgFontSize(vg, 12)
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBAf(1, 1, 1, 0.9))
+    nvgText(vg, x + 6, y + h * 0.5, label)
+
+    -- 箭头
+    local ax = x + w - 12
+    local ay = y + h * 0.5
+    nvgBeginPath(vg)
+    if isOpen then
+        nvgMoveTo(vg, ax - 3, ay + 2)
+        nvgLineTo(vg, ax, ay - 2)
+        nvgLineTo(vg, ax + 3, ay + 2)
+    else
+        nvgMoveTo(vg, ax - 3, ay - 2)
+        nvgLineTo(vg, ax, ay + 2)
+        nvgLineTo(vg, ax + 3, ay - 2)
+    end
+    nvgStrokeColor(vg, nvgRGBAf(1, 1, 1, 0.7))
+    nvgStrokeWidth(vg, 1.5)
+    nvgLineCap(vg, NVG_ROUND)
+    nvgStroke(vg)
+
+    local result = { triggerRect = { x = x, y = y, w = w, h = h }, itemRects = {} }
+
+    -- 展开面板
+    if isOpen then
+        local itemH = h
+        local panelH = #items * itemH + 4
+        local py = y + h + 2
+
+        -- 面板背景
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, x, py, w, panelH, cr)
+        nvgFillColor(vg, nvgRGBAf(0.16, 0.20, 0.30, 0.97))
+        nvgFill(vg)
+        nvgStrokeColor(vg, nvgRGBAf(Theme.ca(accentColor, 0.6)))
+        nvgStrokeWidth(vg, 1.0)
+        nvgStroke(vg)
+
+        for i, item in ipairs(items) do
+            local iy = py + 2 + (i - 1) * itemH
+            local itemRect = { x = x, y = iy, w = w, h = itemH }
+            result.itemRects[i] = itemRect
+
+            local itemHover = M.isPointerInRect(x, iy, w, itemH)
+            local isSel = (i == selIdx)
+
+            if itemHover then
+                nvgBeginPath(vg)
+                nvgRect(vg, x + 2, iy, w - 4, itemH)
+                nvgFillColor(vg, nvgRGBAf(0.30, 0.38, 0.55, 0.8))
+                nvgFill(vg)
+            elseif isSel then
+                nvgBeginPath(vg)
+                nvgRect(vg, x + 2, iy, w - 4, itemH)
+                nvgFillColor(vg, nvgRGBAf(Theme.ca(accentColor, 0.15)))
+                nvgFill(vg)
+            end
+
+            nvgFontFace(vg, Theme.font.family)
+            nvgFontSize(vg, 11)
+            nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+            local tColor = isSel and accentColor or Theme.colors.lightText
+            nvgFillColor(vg, nvgRGBAf(Theme.c(tColor)))
+            nvgText(vg, x + 8, iy + itemH * 0.5, item)
+        end
+    end
+
+    return result
+end
+
+-- ═══════════════════════════════════════════
+-- 可叠加标签 Tag (带 ×N 计数 + [−][+] 按钮)
+-- 返回 { tagRect, minusRect, plusRect }
+-- ═══════════════════════════════════════════
+function M.drawTag(vg, x, y, label, count, bgColor, opts)
+    opts = opts or {}
+    local h = 22
+    local cr = h * 0.5
+    bgColor = bgColor or Theme.colors.accentPurple
+
+    nvgFontFace(vg, Theme.font.family)
+    nvgFontSize(vg, 11)
+
+    -- 标签文字 + 计数
+    local display = label
+    if count and count > 1 then display = label .. " x" .. count end
+    local tw = nvgTextBounds(vg, 0, 0, display)
+    local tagW = tw + 16
+
+    -- 标签胶囊
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, x, y, tagW, h, cr)
+    nvgFillColor(vg, nvgRGBAf(Theme.ca(bgColor, 0.7)))
+    nvgFill(vg)
+    nvgStrokeColor(vg, nvgRGBAf(Theme.ca(bgColor, 0.9)))
+    nvgStrokeWidth(vg, 1.0)
+    nvgStroke(vg)
+
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBAf(1, 1, 1, 0.95))
+    nvgText(vg, x + tagW * 0.5, y + h * 0.5, display)
+
+    -- [−] 按钮
+    local btnW = 18
+    local btnH = 18
+    local gap = 4
+    local minusX = x + tagW + gap
+    local btnY = y + (h - btnH) * 0.5
+    local minusHover = M.isPointerInRect(minusX, btnY, btnW, btnH)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, minusX, btnY, btnW, btnH, 3)
+    nvgFillColor(vg, nvgRGBAf(0.45, 0.25, 0.25, minusHover and 0.9 or 0.6))
+    nvgFill(vg)
+    nvgFontSize(vg, 13)
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBAf(1, 0.6, 0.6, 1))
+    nvgText(vg, minusX + btnW * 0.5, btnY + btnH * 0.5, "-")
+
+    -- [+] 按钮
+    local plusX = minusX + btnW + 2
+    local plusHover = M.isPointerInRect(plusX, btnY, btnW, btnH)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, plusX, btnY, btnW, btnH, 3)
+    nvgFillColor(vg, nvgRGBAf(0.25, 0.40, 0.30, plusHover and 0.9 or 0.6))
+    nvgFill(vg)
+    nvgFillColor(vg, nvgRGBAf(0.6, 1, 0.7, 1))
+    nvgText(vg, plusX + btnW * 0.5, btnY + btnH * 0.5, "+")
+
+    local totalW = tagW + gap + btnW * 2 + 2
+    return {
+        tagRect = { x = x, y = y, w = tagW, h = h },
+        minusRect = { x = minusX, y = btnY, w = btnW, h = btnH },
+        plusRect = { x = plusX, y = btnY, w = btnW, h = btnH },
+        totalW = totalW,
+    }
+end
+
 return M

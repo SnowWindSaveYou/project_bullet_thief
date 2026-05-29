@@ -328,15 +328,17 @@ function Xingye.draw(vg, cx, cy, r, flash, age, dir, face_yaw)
     nvgFillColor(vg, nvgRGBAf(0.95, 0.55, 0.55, blushAlpha))
     nvgFill(vg)
 
-    -- === 9. 星星发夹（固定右侧，伪3D fx*0.45）===
+    -- === 9. 星星发夹（固定视觉右侧，不随整体镜像翻转）===
     local starFx = fx * 0.45
-    local starCX = (headW / 2 - 3 * s) + starFx
+    local starCX = (headW / 2 - 3 * s) + starFx   -- 基础位置（右侧）
     local starCY2 = headCY - 1 * s
     local starOuter = 5.5 * s
     local starInner = 2.5 * s
     local starRot = math.sin(age * 2.5) * 0.1
     nvgSave(vg)
-    nvgTranslate(vg, starCX, starCY2)
+    -- starCX * dir：抵消外层 nvgScale(dir,1) 对位置的翻转
+    nvgTranslate(vg, starCX * dir, starCY2)
+    nvgScale(vg, dir, 1)  -- 抵消外层对形状/旋转的翻转
     nvgRotate(vg, starRot)
     nvgBeginPath(vg)
     starPath(vg, 0, 0, starOuter, starInner)

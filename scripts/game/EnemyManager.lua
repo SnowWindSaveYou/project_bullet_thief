@@ -10,6 +10,8 @@ local Pool      = require "lib.Pool"
 
 local M = {}
 
+local killCallbacks_ = {}  -- 击杀回调列表
+
 local W_, H_ = 0, 0
 
 local enemyPool_ = Pool.new(32)
@@ -104,6 +106,11 @@ function M.getEnemies()
     return enemies_
 end
 
+--- 注册击杀回调 callback(x, y, etype, idx)
+function M.onKill(callback)
+    killCallbacks_[#killCallbacks_ + 1] = callback
+end
+
 -- ——— 更新 ———
 function M.update(dt)
     waveTimer_ = waveTimer_ + dt
@@ -136,6 +143,15 @@ function M.update(dt)
             -- age 累加（用于动画效果）
             e.age = (e.age or 0) + dt
 
+            -- 减速效果倒计时
+            if e.slowRemaining and e.slowRemaining > 0 then
+                e.slowRemaining = e.slowRemaining - dt
+                if e.slowRemaining <= 0 then
+                    e.slowFactor = nil
+                    e.slowRemaining = nil
+                end
+            end
+
             if e.etype == "laser" then
                 -- 激光敌人特殊状态机
                 updateLaserEnemy(e, player, dt)
@@ -145,7 +161,8 @@ function M.update(dt)
                 local dy = player.y - e.y
                 local dist = math.sqrt(dx * dx + dy * dy)
                 if dist > e.radius + player.radius + 5 then
-                    local spd = e.speed * dt
+                    local slowMult = e.slowFactor or 1.0
+                    local spd = e.speed * slowMult * dt
                     e.x = e.x + (dx / dist) * spd
                     e.y = e.y + (dy / dist) * spd
                 end
@@ -224,6 +241,10 @@ function M.damageEnemy(idx, dmg, isOrbitKill)
         -- 掉落道具
         local ItemMgr = require "game.ItemManager"
         ItemMgr.tryDrop(e.x, e.y, e.cfg)
+        -- 触发击杀回调
+        for _, cb in ipairs(killCallbacks_) do
+            cb(e.x, e.y, e.etype, idx)
+        end
         print("[Enemy] 击杀 type=" .. e.etype
             .. " orbitKill=" .. tostring(isOrbitKill)
             .. " killCount=" .. Player.getKillCount())

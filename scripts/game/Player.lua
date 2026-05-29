@@ -2,10 +2,11 @@
 -- Player.lua - 玩家数据 + 更新 + 绘制
 -- ============================================================================
 
-local Renderer = require "game.Renderer"
-local Input    = require "game.InputHandler"
-local Tween    = require "lib.Tween"
-local Xingye   = require "game.characters.Xingye"
+local Renderer   = require "game.Renderer"
+local Input      = require "game.InputHandler"
+local Tween      = require "lib.Tween"
+local Xingye     = require "game.characters.Xingye"
+local SkillState = require "game.SkillState"
 
 local M = {}
 
@@ -25,6 +26,12 @@ local CFG = {
         minToStart  = 0.25,       -- 最低开启阈值
         cooldown    = 1.5,        -- 退出后冷却
     },
+    -- B线偷取范围 (设计文档数值)
+    stealRadiusBase = 18,             -- 基础偷取半径 = player.radius（无B线）
+    stealRadiusByLevel = { 48, 64, 96 },  -- B1/B2/B3 偷取判定半径
+    stealSlowFactor = 0.85,           -- B2+ 范围内子弹减速倍率
+    stealDeflectDeg = 5,              -- B3 范围内子弹每帧偏转角度
+
     orbitRadius  = 48,            -- 轨道半径（第一圈）
     orbitRadiusStep = 22,         -- 每圈额外半径
     orbitPerLayer = 12,           -- 每层最多多少颗
@@ -51,6 +58,7 @@ function M.reset(_W, _H)
         y             = H_ * 0.5,
         radius        = CFG.radius,
         grazeRadius   = CFG.grazeRadius,
+        stealRadius   = CFG.stealRadiusBase,  -- 动态: 受B线等级影响
         hp            = CFG.maxHp,
         maxHp         = CFG.maxHp,
         energy        = 0.5,
@@ -82,6 +90,14 @@ function M.getData()
 end
 
 function M.update(dt)
+    -- 0. B线偷取范围更新
+    local bLevel = SkillState.getLevel("steal")
+    if bLevel > 0 and CFG.stealRadiusByLevel[bLevel] then
+        data.stealRadius = CFG.stealRadiusByLevel[bLevel]
+    else
+        data.stealRadius = CFG.stealRadiusBase
+    end
+
     -- 1. 移动（发射时不再强制停步）
     -- 鼠标/触摸：拖拽多少像素就移动多少像素（1:1，方便擦弹精确控制）
     local mdx, mdy = Input.dragDelta()
