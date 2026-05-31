@@ -3,10 +3,11 @@
 -- 多攻击模式 + 血条UI + 召唤小怪
 -- ============================================================================
 
-local Renderer  = require "game.Renderer"
-local BulletMgr = require "game.BulletManager"
-local Player    = require "game.Player"
-local VFX       = require "lib.VFX"
+local Renderer     = require "game.Renderer"
+local BulletMgr    = require "game.BulletManager"
+local Player       = require "game.Player"
+local VFX          = require "lib.VFX"
+local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
 
@@ -17,37 +18,58 @@ local W_, H_ = 0, 0
 local boss_ = nil
 local bossActive_ = false
 
--- Boss 配置
-local BOSS_CONFIG = {
-    radius       = 44,
-    hp           = 100,
-    speed        = 35,
-    -- Phase 1 攻击
-    bulletHellInterval = 1.8,   -- 弹海发射间隔
-    bulletHellCount    = 8,     -- 每波弹数
-    bulletHellSpeed    = 170,
-    laserInterval      = 8.0,   -- 激光间隔
-    laserChargeTime    = 1.2,
-    laserFireTime      = 1.0,
-    laserWidth         = 12,
-    laserRange         = 550,
-    -- Phase 2 攻击
-    burstInterval   = 3.0,    -- 可夺取弹爆发间隔
-    burstCount      = 16,     -- 爆发弹数
-    burstSpeed      = 130,
-    -- 召唤
-    summonInterval  = 10.0,   -- 召唤间隔
-    summonCount     = 3,      -- 每次召唤小怪数
-    -- 动画
-    phaseTransTime  = 2.0,    -- 阶段转换时间
-}
-
--- Boss 出现触发条件
+-- Boss 配置（从 JSON 延迟加载）
+local BOSS_CONFIG = nil
 local BOSS_KILL_THRESHOLD = 500
+
+local function loadBossConfig()
+    if BOSS_CONFIG then return BOSS_CONFIG end
+    local data = ConfigLoader.load("config/bosses/dream_sovereign.json")
+    if data then
+        BOSS_CONFIG = {
+            radius       = data.radius or 44,
+            hp           = data.hp or 100,
+            speed        = data.speed or 35,
+            -- Phase 1
+            bulletHellInterval = data.phases.phase1.bulletHell.interval,
+            bulletHellCount    = data.phases.phase1.bulletHell.count,
+            bulletHellSpeed    = data.phases.phase1.bulletHell.speed,
+            laserInterval      = data.phases.phase1.laser.interval,
+            laserChargeTime    = data.phases.phase1.laser.chargeTime,
+            laserFireTime      = data.phases.phase1.laser.fireTime,
+            laserWidth         = data.phases.phase1.laser.width,
+            laserRange         = data.phases.phase1.laser.range,
+            -- Phase 2
+            burstInterval   = data.phases.phase2.burst.interval,
+            burstCount      = data.phases.phase2.burst.count,
+            burstSpeed      = data.phases.phase2.burst.speed,
+            -- 召唤
+            summonInterval  = data.summon.interval,
+            summonCount     = data.summon.count,
+            -- 动画
+            phaseTransTime  = data.phaseTransTime or 2.0,
+        }
+        BOSS_KILL_THRESHOLD = data.killThreshold or 500
+        print("[BossManager] 从 JSON 加载 Boss 配置: " .. (data.name or data.id))
+    end
+    if not BOSS_CONFIG then
+        print("[BossManager] WARN: JSON 加载失败，使用内置默认值")
+        BOSS_CONFIG = {
+            radius = 44, hp = 100, speed = 35,
+            bulletHellInterval = 1.8, bulletHellCount = 8, bulletHellSpeed = 170,
+            laserInterval = 8.0, laserChargeTime = 1.2, laserFireTime = 1.0, laserWidth = 12, laserRange = 550,
+            burstInterval = 3.0, burstCount = 16, burstSpeed = 130,
+            summonInterval = 10.0, summonCount = 3,
+            phaseTransTime = 2.0,
+        }
+    end
+    return BOSS_CONFIG
+end
 
 function M.init(_W, _H)
     W_ = _W
     H_ = _H
+    loadBossConfig()
     M.reset()
 end
 

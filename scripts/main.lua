@@ -96,12 +96,7 @@ function Start()
 
     VFX.setContext(vg, W, H, 0)
 
-    -- 注册击杀回调（D线梦境连线）
-    EnemyMgr.onKill(function(x, y, etype, idx)
-        if LinkSystem.isActive() then
-            LinkSystem.onEnemyKilled(x, y)
-        end
-    end)
+    -- D线通过 Player.onBTEnd 回调自动触发，无需手动注册
 
     -- 订阅事件
     SubscribeToEvent(vg, "NanoVGRender", "HandleRender")
@@ -257,24 +252,20 @@ function checkCollisions(dt)
                 goto continue_bullet
             end
 
-            -- 擦弹
-            if dist < player.grazeRadius and not b.grazed then
-                b.grazed = true
-                local grazeFactor = 1.0 - (dist / player.grazeRadius)
-                Player.addEnergy(0.08 * grazeFactor)
-                VFX.spawnGraze(b.x, b.y, player.x, player.y)
-                VFX.spawnPopup("+EN", b.x, b.y, 100, 220, 255)
-            end
-
             -- B线效果：BT中范围内子弹减速(B2+)和偏转(B3)
+            -- 注意：偷取判定必须在擦弹之前，避免同一帧同时弹出 +EN 和 STEAL
             if player.bulletTimeActive then
                 local stealDist = player.stealRadius + (b.radius or 6)
                 if dist < stealDist then
-                    -- B2+: 范围内子弹减速
+                    -- B2+: 范围内子弹减速（通过缩放 vx/vy）
                     local bLv = SkillState.getLevel("steal")
                     if bLv >= 2 then
-                        b.speed = (b.baseSpeed or b.speed) * 0.85
-                        if not b.baseSpeed then b.baseSpeed = b.speed / 0.85 end
+                        if not b.baseVx then
+                            b.baseVx = b.vx
+                            b.baseVy = b.vy
+                        end
+                        b.vx = b.baseVx * 0.85
+                        b.vy = b.baseVy * 0.85
                     end
                     -- B3: 范围内子弹向主角偏转 5°/帧
                     if bLv >= 3 and b.angle then
@@ -294,10 +285,25 @@ function checkCollisions(dt)
                     end
 
                     -- BT偷取判定（扩大范围）
+                    local stolenX, stolenY = b.x, b.y
                     BulletMgr.stealBullet(i)
                     Player.onSteal()
-                    VFX.spawnPopup("STEAL!", b.x, b.y, 80, 255, 200)
+                    VFX.spawnPopup("STEAL", stolenX, stolenY, 80, 255, 200, 0.55)
+                    -- C/D线：在被夺子弹原位触发
+                    if MineSystem.isActive() then MineSystem.onBulletStolen(stolenX, stolenY) end
+                    if LinkSystem.isActive() then LinkSystem.onBulletStolen(stolenX, stolenY) end
                     goto continue_bullet
+                end
+            end
+
+            -- 擦弹（BT期间不触发，专注夺取）
+            if not player.bulletTimeActive then
+                if dist < player.grazeRadius and not b.grazed then
+                    b.grazed = true
+                    local grazeFactor = 1.0 - (dist / player.grazeRadius)
+                    Player.addEnergy(0.45 * grazeFactor)
+                    VFX.spawnGraze(b.x, b.y, player.x, player.y)
+                    VFX.spawnPopup("+EN", b.x, b.y, 100, 220, 255)
                 end
             end
 
@@ -305,9 +311,13 @@ function checkCollisions(dt)
             if dist < (player.radius + b.radius) then
                 if player.bulletTimeActive then
                     -- 近距离偷取（无论B线等级）
+                    local stolenX2, stolenY2 = b.x, b.y
                     BulletMgr.stealBullet(i)
                     Player.onSteal()
-                    VFX.spawnPopup("STEAL!", b.x, b.y, 80, 255, 200)
+                    VFX.spawnPopup("STEAL", stolenX2, stolenY2, 80, 255, 200, 0.55)
+                    -- C/D线：在被夺子弹原位触发
+                    if MineSystem.isActive() then MineSystem.onBulletStolen(stolenX2, stolenY2) end
+                    if LinkSystem.isActive() then LinkSystem.onBulletStolen(stolenX2, stolenY2) end
                 else
                     b.dead = true
                     Player.takeDamage(b.damage or 1)
@@ -871,7 +881,7 @@ function applyItemEffect(item)
         VFX.spawnHeal(Player.getData(), Player.getData().radius)
         VFX.spawnBanner("HEAL", 80, 200, 80)
     elseif item.type == "energy" then
-        Player.addEnergy(0.4)
+        Player.addEnergy(2.2)
         VFX.spawnBanner("CHARGE", 80, 220, 255)
     elseif item.type == "coin" then
         Player.addCoins(item.value or 1)
@@ -1361,7 +1371,7 @@ function handleDebugAction(action)
 
     elseif action == "energy" then
         if state == "playing" then
-            Player.addEnergy(1.0)
+            Player.addEnergy(999)
             VFX.spawnBanner("DEBUG: MAX EN", 80, 220, 255)
         end
 

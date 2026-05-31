@@ -3,14 +3,15 @@
 -- 复古卡通桌游风格：米黄底面板 + 深蓝描边卡片 + 棋盘格选中态
 -- ============================================================================
 
-local Tween      = require "lib.Tween"
-local Theme      = require "ui.Theme"
-local Components = require "ui.Components"
-local SkillState = require "game.SkillState"
+local Tween        = require "lib.Tween"
+local Theme        = require "ui.Theme"
+local Components   = require "ui.Components"
+local SkillState   = require "game.SkillState"
+local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
 
--- 升级里程碑（每 50 击杀一次）
+-- 升级里程碑（从 JSON 加载）
 local BASE_THRESHOLD = 50
 local upgradeCount_  = 0
 local showing_       = false
@@ -30,19 +31,34 @@ local anim_ = {
 -- 每张卡片独立动画
 local cardAnims_ = {}  -- { alpha, slideY, scale }
 
--- ——— 升级选项池 ———
-local UPGRADE_POOL = {
-    -- 轨道子弹强化
-    { id = "orbit_dmg",     tree = "orbit",  name = "穿甲弹芯",   desc = "轨道子弹伤害 +1",            icon = "diamond", color = {0.3, 0.8, 1.0} },
-    { id = "orbit_layers",  tree = "orbit",  name = "扩编轨道",   desc = "每圈最多子弹数 +4",           icon = "ring",    color = {0.3, 0.8, 1.0} },
-    -- 子弹时间强化
-    { id = "bt_regen",      tree = "bullet", name = "量子充能",   desc = "能量恢复速度 +40%",           icon = "bolt",    color = {0.8, 0.4, 1.0} },
-    { id = "bt_cost",       tree = "bullet", name = "节能模式",   desc = "子弹时间能量消耗 -25%",       icon = "shield",  color = {0.8, 0.4, 1.0} },
-    { id = "bt_graze",      tree = "bullet", name = "危险舞者",   desc = "擦弹能量获取 +50%",           icon = "star",    color = {0.8, 0.4, 1.0} },
-    -- 通用
-    { id = "hp_up",         tree = "misc",   name = "钢铁意志",   desc = "最大血量 +20",                icon = "heart",   color = {1.0, 0.4, 0.4} },
-    { id = "hp_regen",      tree = "misc",   name = "生命脉动",   desc = "每次夺取子弹恢复 1 血量",    icon = "heal",    color = {1.0, 0.4, 0.4} },
-}
+-- ——— 升级选项池（从 JSON 延迟加载） ———
+local UPGRADE_POOL = nil
+local FIRST_TRIGGER_OVERRIDE = 25
+
+local function loadUpgradePool()
+    if UPGRADE_POOL then return UPGRADE_POOL end
+    local data = ConfigLoader.load("config/upgrades.json")
+    if data then
+        BASE_THRESHOLD = data.triggerThreshold or 50
+        FIRST_TRIGGER_OVERRIDE = data.firstTriggerOverride or 25
+        UPGRADE_POOL = data.pool or {}
+        print("[UpgradeSystem] 从 JSON 加载 " .. #UPGRADE_POOL .. " 个升级选项, 阈值=" .. BASE_THRESHOLD)
+    end
+    if not UPGRADE_POOL or #UPGRADE_POOL == 0 then
+        print("[UpgradeSystem] WARN: JSON 加载失败，使用内置默认值")
+        UPGRADE_POOL = {
+            { id = "orbit_dmg",    tree = "orbit",  name = "穿甲弹芯", desc = "轨道子弹伤害 +1",            icon = "diamond", color = {0.3, 0.8, 1.0}, effect = { stat = "orbitDamage", op = "add", value = 1 } },
+            { id = "orbit_layers", tree = "orbit",  name = "扩编轨道", desc = "每圈最多子弹数 +4",           icon = "ring",    color = {0.3, 0.8, 1.0}, effect = { stat = "maxOrbitBullets", op = "add", value = 4 } },
+            { id = "bt_cap",       tree = "bullet", name = "深渊容器", desc = "能量上限 +30%（BT持续更久）", icon = "diamond", color = {0.8, 0.4, 1.0}, effect = { stat = "energyMaxMult", op = "mult", value = 1.3 } },
+            { id = "bt_regen",     tree = "bullet", name = "量子充能", desc = "能量恢复速度 +40%",           icon = "bolt",    color = {0.8, 0.4, 1.0}, effect = { stat = "energyRegenMult", op = "mult", value = 1.4 } },
+            { id = "bt_cost",      tree = "bullet", name = "节能模式", desc = "子弹时间能量消耗 -25%",       icon = "shield",  color = {0.8, 0.4, 1.0}, effect = { stat = "energyCostMult", op = "mult", value = 0.75 } },
+            { id = "bt_graze",     tree = "bullet", name = "危险舞者", desc = "擦弹能量获取 +50%",           icon = "star",    color = {0.8, 0.4, 1.0}, effect = { stat = "grazeEnergyMult", op = "mult", value = 1.5 } },
+            { id = "hp_up",        tree = "misc",   name = "钢铁意志", desc = "最大血量 +20",                icon = "heart",   color = {1.0, 0.4, 0.4}, effect = { stat = "maxHp", op = "add", value = 20 } },
+            { id = "hp_regen",     tree = "misc",   name = "生命脉动", desc = "每次夺取子弹恢复 1 血量",    icon = "heal",    color = {1.0, 0.4, 0.4}, effect = { stat = "stealHeal", op = "add", value = 1 } },
+        }
+    end
+    return UPGRADE_POOL
+end
 
 local ownedUpgrades_ = {}
 
@@ -210,6 +226,7 @@ local function buildSkillPool()
 end
 
 function M.init()
+    loadUpgradePool()
     upgradeCount_   = 0
     showing_        = false
     cards_          = {}
@@ -232,11 +249,11 @@ function M.setSize(_W, _H)
 end
 
 function M.getNextThreshold()
-    -- 开场 25 击杀时额外触发一次，之后按 50 递增（75, 125, 175...）
+    -- 开场首次触发使用 firstTriggerOverride，之后按 BASE_THRESHOLD 递增
     if upgradeCount_ == 0 then
-        return 25
+        return FIRST_TRIGGER_OVERRIDE
     end
-    return 25 + BASE_THRESHOLD * upgradeCount_
+    return FIRST_TRIGGER_OVERRIDE + BASE_THRESHOLD * upgradeCount_
 end
 
 function M.isShowing()
@@ -427,16 +444,20 @@ function M.applyUpgrade(u)
         return
     end
 
-    -- 通用升级
-    if u.id == "orbit_dmg"    then p.orbitDamage = (p.orbitDamage or 1) + 1
-    elseif u.id == "orbit_layers" then p.maxOrbitBullets = (p.maxOrbitBullets or 12) + 4
-    elseif u.id == "bt_regen"     then p.energyRegenMult = (p.energyRegenMult or 1) * 1.4
-    elseif u.id == "bt_cost"      then p.energyCostMult = (p.energyCostMult or 1) * 0.75
-    elseif u.id == "bt_graze"     then p.grazeEnergyMult = (p.grazeEnergyMult or 1) * 1.5
-    elseif u.id == "hp_up"        then
-        p.maxHp = p.maxHp + 20
-        p.hp    = math.min(p.maxHp, p.hp + 20)
-    elseif u.id == "hp_regen"     then p.stealHeal = (p.stealHeal or 0) + 1
+    -- 数据驱动通用升级（基于 effect 字段）
+    local eff = u.effect
+    if eff and eff.stat and eff.op then
+        local stat = eff.stat
+        local val  = eff.value or 0
+        if eff.op == "add" then
+            p[stat] = (p[stat] or 0) + val
+        elseif eff.op == "mult" then
+            p[stat] = (p[stat] or 1) * val
+        end
+        -- hp_up 特殊处理：同时治疗
+        if u.id == "hp_up" then
+            p.hp = math.min(p.maxHp, p.hp + val)
+        end
     end
 end
 

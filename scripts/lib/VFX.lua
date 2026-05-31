@@ -245,18 +245,7 @@ function M.drawBanners()
 
         local rowY = baseY - (idx - 1) * (banner.size * 1.3) + globalOffY
 
-        -- ── 背景光晕 ──────────────────────────────────────────────────────
-        if globalAlpha > 0.05 then
-            local hW = totalW * 0.65 + banner.size
-            local hH = banner.size * 0.7
-            local glow = nvgRadialGradient(vg, cx, rowY, 0, math.max(hW, hH) * 1.4,
-                nvgRGBA(banner.r, banner.g, banner.b, math.floor(globalAlpha * 38)),
-                nvgRGBA(banner.r, banner.g, banner.b, 0))
-            nvgBeginPath(vg)
-            nvgRect(vg, cx - hW * 1.4, rowY - hH * 1.4, hW * 2.8, hH * 2.8)
-            nvgFillPaint(vg, glow)
-            nvgFill(vg)
-        end
+
 
         -- ── 逐字绘制 ───────────────────────────────────────────────────────
         local curX = cx - totalW / 2

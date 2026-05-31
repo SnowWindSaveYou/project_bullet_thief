@@ -3,10 +3,11 @@
 -- 敌人类型: "scout"(侦察) / "heavy"(重炮) / "sniper"(狙击)
 -- ============================================================================
 
-local Renderer  = require "game.Renderer"
-local BulletMgr = require "game.BulletManager"
-local Player    = require "game.Player"
-local Pool      = require "lib.Pool"
+local Renderer     = require "game.Renderer"
+local BulletMgr    = require "game.BulletManager"
+local Player       = require "game.Player"
+local Pool         = require "lib.Pool"
+local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
 
@@ -23,69 +24,75 @@ local spawnTimer_  = 0
 local waveTimer_   = 0
 local difficulty_  = 1.0
 
--- ——— 敌人配置 ———
--- 设计约定：hp == bulletCount * bulletDamage
--- 即玩家把一次攻击的子弹全部夺取并打回，恰好能击杀该敌人
-local ENEMY_TYPES = {
-    scout = {
-        radius        = 14,
-        hp            = 1,   -- bulletCount(1) * bulletDamage(1)
-        speed         = 90,
-        color         = { 0.85, 0.6, 0.1 },  -- 橙色
-        shootInterval = 2.0,
-        bulletCount   = 1,
-        bulletSpread  = 0,
-        bulletSpeed   = 200,
-        bulletDamage  = 1,
-    },
-    heavy = {
-        radius        = 22,
-        hp            = 3,   -- bulletCount(3) * bulletDamage(1)
-        speed         = 50,
-        color         = { 0.6, 0.2, 0.8 },  -- 紫色
-        shootInterval = 3.0,
-        bulletCount   = 3,   -- 扇形三连射
-        bulletSpread  = 18,  -- 各子弹偏转 ±18°
-        bulletSpeed   = 160,
-        bulletDamage  = 1,
-    },
-    sniper = {
-        radius        = 12,
-        hp            = 2,   -- bulletCount(1) * bulletDamage(2)
-        speed         = 70,
-        color         = { 0.9, 0.15, 0.3 },  -- 深红
-        shootInterval = 4.0,
-        bulletCount   = 1,
-        bulletSpread  = 0,
-        bulletSpeed   = 380,
-        bulletDamage  = 2,   -- 高伤单发，夺取后一击毙命
-    },
-    laser = {
-        radius        = 16,
-        hp            = 4,
-        speed         = 30,   -- 极慢
-        color         = { 0.7, 0.0, 0.1 },  -- 深红
-        shootInterval = 6.0,  -- 激光循环间隔
-        bulletCount   = 0,    -- 不发射子弹
-        bulletSpread  = 0,
-        bulletSpeed   = 0,
-        bulletDamage  = 0,
-        -- 激光专属参数
-        laserChargeTime = 1.5,   -- 蓄力时间
-        laserFireTime   = 1.2,   -- 发射持续时间
-        laserDamage     = 1,     -- 每 tick 伤害
-        laserWidth      = 8,     -- 光束宽度
-        laserRange      = 500,   -- 最大射程
-    },
-}
-
--- 生成间隔（随难度缩短）
+-- ——— 敌人配置（从 JSON 延迟加载） ———
+local ENEMY_TYPES = nil
 local BASE_SPAWN_INTERVAL = 1.8
+local SPAWN_CFG = nil
+
+--- 从 enemies.json 加载敌人类型配置
+local function loadEnemyTypes()
+    if ENEMY_TYPES then return ENEMY_TYPES end
+    local data = ConfigLoader.load("config/enemies.json")
+    if data then
+        ENEMY_TYPES = {}
+        for etype, raw in pairs(data) do
+            local cfg = {
+                radius        = raw.radius,
+                hp            = raw.hp,
+                speed         = raw.speed,
+                color         = raw.color,
+                shootInterval = raw.attack and raw.attack.interval or 2.0,
+                bulletCount   = raw.attack and raw.attack.bulletCount or 1,
+                bulletSpread  = raw.attack and raw.attack.bulletSpread or 0,
+                bulletSpeed   = raw.attack and raw.attack.bulletSpeed or 200,
+                bulletDamage  = raw.attack and raw.attack.bulletDamage or 1,
+            }
+            -- 激光专属参数
+            if raw.laser then
+                cfg.laserChargeTime = raw.laser.chargeTime
+                cfg.laserFireTime   = raw.laser.fireTime
+                cfg.laserDamage     = raw.laser.damage
+                cfg.laserWidth      = raw.laser.width
+                cfg.laserRange      = raw.laser.range
+            end
+            ENEMY_TYPES[etype] = cfg
+        end
+        local cnt = 0; for _ in pairs(ENEMY_TYPES) do cnt = cnt + 1 end
+        print("[EnemyManager] 从 JSON 加载 " .. cnt .. " 种敌人配置")
+    end
+    if not ENEMY_TYPES then
+        print("[EnemyManager] WARN: JSON 加载失败，使用内置默认值")
+        ENEMY_TYPES = {
+            scout  = { radius=14, hp=1, speed=90, color={0.85,0.6,0.1}, shootInterval=2.0, bulletCount=1, bulletSpread=0, bulletSpeed=200, bulletDamage=1 },
+            heavy  = { radius=22, hp=3, speed=50, color={0.6,0.2,0.8}, shootInterval=3.0, bulletCount=3, bulletSpread=18, bulletSpeed=160, bulletDamage=1 },
+            sniper = { radius=12, hp=2, speed=70, color={0.9,0.15,0.3}, shootInterval=4.0, bulletCount=1, bulletSpread=0, bulletSpeed=380, bulletDamage=2 },
+            laser  = { radius=16, hp=4, speed=30, color={0.7,0.0,0.1}, shootInterval=6.0, bulletCount=0, bulletSpread=0, bulletSpeed=0, bulletDamage=0, laserChargeTime=1.5, laserFireTime=1.2, laserDamage=1, laserWidth=8, laserRange=500 },
+        }
+    end
+    return ENEMY_TYPES
+end
+
+--- 从 enemies_spawning.json 加载刷怪节奏配置
+local function loadSpawnCfg()
+    if SPAWN_CFG then return SPAWN_CFG end
+    local data = ConfigLoader.load("config/enemies_spawning.json")
+    if data then
+        SPAWN_CFG = data
+        BASE_SPAWN_INTERVAL = data.baseInterval or 1.8
+        print("[EnemyManager] 从 JSON 加载刷怪节奏配置")
+    end
+    if not SPAWN_CFG then
+        SPAWN_CFG = { baseInterval = 1.8, maxDifficulty = 3.0 }
+    end
+    return SPAWN_CFG
+end
 local autoSpawnEnabled_ = true
 
 function M.init(_W, _H)
     W_ = _W
     H_ = _H
+    loadEnemyTypes()
+    loadSpawnCfg()
     M.reset()
 end
 

@@ -5,90 +5,61 @@
 -- ============================================================================
 
 local SkillState = require "game.SkillState"
+local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
 
--- ═══ 形态配置 ═══
+-- ═══ 形态配置（从 JSON 加载） ═══
 
--- Q-0: 默认（全弹瞄准爆发）
-local FORM_DEFAULT = {
-    id = "default",
-    window       = 1.5,    -- QTE 窗口
-    burstDelay   = 0.03,   -- 连射间隔
-    speedMult    = 1.8,    -- 速度倍率
-    baseDmgMult  = 1.5,    -- 基础伤害倍率
-    countBonus   = 0.12,   -- 每颗额外加成
-    levelBonus = {
-        [2] = { baseDmgMult = 1.8 },
-        [3] = { baseDmgMult = 2.0, window = 2.0 },
-        [4] = { baseDmgMult = 2.0, window = 2.0, countBonus = 0.18 },
-        [5] = { baseDmgMult = 2.5, window = 2.5, countBonus = 0.18, autoTrigger = true },
-    },
-}
+local FORMS = nil  -- 延迟初始化
 
--- Q-1: 碎星裁光（光束）- 所有轨道弹融合为单次高伤光束
-local FORM_BEAM = {
-    id = "beam",
-    window       = 1.5,
-    speedMult    = 2.5,
-    baseDmgMult  = 2.0,     -- 融合后的单发倍率
-    countBonus   = 0.25,    -- 数量加成更高（鼓励囤弹）
-    beamWidth    = 12,      -- 光束宽度（用于判定命中）
-    beamLength   = 600,     -- 光束长度
-    pierce       = true,    -- 穿透所有敌人
-    -- 等级加成
-    levelBonus = {
-        [2] = { baseDmgMult = 2.5, beamWidth = 16 },
-        [3] = { baseDmgMult = 3.0, beamWidth = 16, beamLength = 800 },
-        [4] = { baseDmgMult = 3.0, beamWidth = 20, beamLength = 800, stunDuration = 0.8 },
-        [5] = { baseDmgMult = 4.0, beamWidth = 24, beamLength = 1000, stunDuration = 1.2, chain = true },
-    },
-}
+--- 将 JSON 的 string key levelBonus 转为 Lua numeric key
+local function convertLevelBonus(tbl)
+    if not tbl then return nil end
+    local out = {}
+    for k, v in pairs(tbl) do
+        out[tonumber(k)] = v
+    end
+    return out
+end
 
--- Q-2: 坠星飞雨（星坠）- 360° 全方向爆发
-local FORM_RADIAL = {
-    id = "radial",
-    window       = 1.5,
-    burstDelay   = 0,       -- 全部同时发射
-    speedMult    = 1.6,
-    baseDmgMult  = 1.2,     -- 单发略低（数量优势补偿）
-    countBonus   = 0.08,
-    extraBullets = 0,       -- 额外弹幕数（等级加成）
-    -- 等级加成
-    levelBonus = {
-        [2] = { baseDmgMult = 1.5, extraBullets = 4 },
-        [3] = { baseDmgMult = 1.5, extraBullets = 8, speedMult = 2.0 },
-        [4] = { baseDmgMult = 1.8, extraBullets = 8, speedMult = 2.0, explodeOnHit = true, explodeRadius = 30 },
-        [5] = { baseDmgMult = 2.0, extraBullets = 12, speedMult = 2.2, explodeOnHit = true, explodeRadius = 40, secondWave = true },
-    },
-}
+--- 从 protagonist.json 加载 QTE 形态配置
+local function loadForms()
+    if FORMS then return FORMS end
 
--- Q-3: 群星逐影（群星追踪）- 追踪弹
-local FORM_HOMING = {
-    id = "homing",
-    window       = 2.0,     -- 更长窗口
-    burstDelay   = 0.05,    -- 稍慢连射
-    speedMult    = 1.4,     -- 初速低（会加速）
-    baseDmgMult  = 1.8,
-    countBonus   = 0.15,
-    turnRate     = 6.0,     -- 追踪转向速率 (rad/s)
-    accel        = 200,     -- 加速度
-    lifetime     = 3.0,     -- 追踪弹寿命
-    -- 等级加成
-    levelBonus = {
-        [2] = { turnRate = 8.0, baseDmgMult = 2.0 },
-        [3] = { turnRate = 8.0, baseDmgMult = 2.0, multiLock = true },
-        [4] = { turnRate = 10.0, baseDmgMult = 2.5, multiLock = true, splitOnKill = true },
-        [5] = { turnRate = 12.0, baseDmgMult = 3.0, multiLock = true, splitOnKill = true, lifetime = 5.0 },
-    },
-}
+    local data = ConfigLoader.load("config/characters/protagonist.json")
+    if data and data.skills and data.skills.qte then
+        local order = { "default", "beam", "radial", "homing" }
+        FORMS = {}
+        for i, key in ipairs(order) do
+            local raw = data.skills.qte[key]
+            if raw then
+                local form = {}
+                for k, v in pairs(raw) do
+                    if k == "levelBonus" then
+                        form[k] = convertLevelBonus(v)
+                    else
+                        form[k] = v
+                    end
+                end
+                FORMS[i] = form
+            end
+        end
+        print("[QTEHandler] 从 JSON 加载 " .. #FORMS .. " 个形态配置")
+    end
 
-local FORMS = {
-    [1] = FORM_DEFAULT,
-    [2] = FORM_BEAM,
-    [3] = FORM_RADIAL,
-    [4] = FORM_HOMING,
-}
+    -- 兜底默认值
+    if not FORMS or #FORMS == 0 then
+        print("[QTEHandler] WARN: JSON 加载失败，使用内置默认值")
+        FORMS = {
+            [1] = { id = "default", window = 0.9, burstDelay = 0.03, speedMult = 1.8, baseDmgMult = 1.5, countBonus = 0.12 },
+            [2] = { id = "beam", window = 0.9, speedMult = 2.5, baseDmgMult = 2.0, countBonus = 0.25, beamWidth = 12, beamLength = 600, pierce = true },
+            [3] = { id = "radial", window = 0.9, burstDelay = 0, speedMult = 1.6, baseDmgMult = 1.2, countBonus = 0.08, extraBullets = 0 },
+            [4] = { id = "homing", window = 1.1, burstDelay = 0.05, speedMult = 1.4, baseDmgMult = 1.8, countBonus = 0.15, turnRate = 6.0, accel = 200, lifetime = 3.0 },
+        }
+    end
+    return FORMS
+end
 
 -- ═══ 内部状态 ═══
 
@@ -123,9 +94,10 @@ end
 --- 获取当前 QTE 形态配置（含等级加成）
 ---@return table config
 function M.getFormConfig()
+    local forms = loadForms()
     local form = SkillState.getForm("qte")
     local level = SkillState.getLevel("qte")
-    local base = FORMS[form] or FORM_DEFAULT
+    local base = forms[form] or forms[1]
     if base.id == "default" and level <= 1 then return base end
 
     local cfg = {}
@@ -151,7 +123,7 @@ end
 --- 获取 QTE 窗口时长
 ---@return number
 function M.getWindow()
-    return M.getFormConfig().window or 1.5
+    return M.getFormConfig().window or 0.9
 end
 
 --- 获取爆发时每颗子弹间隔

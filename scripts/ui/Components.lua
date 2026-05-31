@@ -354,16 +354,40 @@ function M.drawCircleButton(vg, cx, cy, r, label, opts)
     nvgSave(vg)
     nvgGlobalAlpha(vg, globalAlpha)
 
-    -- 能量弧
+    -- 能量弧（支持双色溢出）
     if fillRatio > 0.01 then
-        local arc = fillRatio * math.pi * 2
-        nvgBeginPath(vg)
-        nvgArc(vg, cx, cy, drawR - 4, -math.pi * 0.5, -math.pi * 0.5 + arc, NVG_CW)
         local alpha = isActive and 1.0 or 0.7
-        nvgStrokeColor(vg, nvgRGBAf(cr, cg, cb, alpha))
-        nvgStrokeWidth(vg, 3.5)
-        nvgLineCap(vg, NVG_ROUND)
-        nvgStroke(vg)
+        local overStart = opts.overflowStart   -- 基础容量占满圈比例（nil=无溢出）
+        local overColor = opts.overflowColor   -- {r,g,b}
+
+        if overStart and overStart < 1.0 and fillRatio > overStart then
+            -- 基础段
+            local baseArc = overStart * math.pi * 2
+            nvgBeginPath(vg)
+            nvgArc(vg, cx, cy, drawR - 4, -math.pi * 0.5, -math.pi * 0.5 + baseArc, NVG_CW)
+            nvgStrokeColor(vg, nvgRGBAf(cr, cg, cb, alpha))
+            nvgStrokeWidth(vg, 3.5)
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+            -- 溢出段（紫色）
+            local overArc = (fillRatio - overStart) * math.pi * 2
+            local startA = -math.pi * 0.5 + baseArc
+            nvgBeginPath(vg)
+            nvgArc(vg, cx, cy, drawR - 4, startA, startA + overArc, NVG_CW)
+            nvgStrokeColor(vg, nvgRGBAf(overColor[1], overColor[2], overColor[3], alpha))
+            nvgStrokeWidth(vg, 3.5)
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+        else
+            -- 普通单色弧
+            local arc = fillRatio * math.pi * 2
+            nvgBeginPath(vg)
+            nvgArc(vg, cx, cy, drawR - 4, -math.pi * 0.5, -math.pi * 0.5 + arc, NVG_CW)
+            nvgStrokeColor(vg, nvgRGBAf(cr, cg, cb, alpha))
+            nvgStrokeWidth(vg, 3.5)
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+        end
     end
 
     -- 外描边（保留边框）

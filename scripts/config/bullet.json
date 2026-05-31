@@ -1,0 +1,17 @@
+{
+  "fireTiers": [
+    { "maxBullets": 3,   "interval": 0.28, "perShot": 1, "spread": 0 },
+    { "maxBullets": 8,   "interval": 0.18, "perShot": 1, "spread": 0 },
+    { "maxBullets": 15,  "interval": 0.14, "perShot": 2, "spread": 0.18 },
+    { "maxBullets": 999, "interval": 0.10, "perShot": 3, "spread": 0.25 }
+  ],
+  "fireSpeed": 420,
+  "orbit": {
+    "baseRadius": 48,
+    "radiusStep": 22,
+    "perLayer": 12,
+    "collectSpeed": 600,
+    "collectLerp": 14,
+    "collectMinSpd": 80
+  }
+}

@@ -28,6 +28,7 @@ local openDropdown_ = nil  -- 当前展开的 dropdown key (互斥)
 local BUFF_DEFS = {
     { id = "orbit_dmg",    name = "穿甲弹芯",  color = { 0.30, 0.80, 1.00, 1.0 } },
     { id = "orbit_layers", name = "扩编轨道",  color = { 0.30, 0.80, 1.00, 1.0 } },
+    { id = "bt_cap",       name = "深渊容器",  color = { 0.80, 0.40, 1.00, 1.0 } },
     { id = "bt_regen",     name = "量子充能",  color = { 0.80, 0.40, 1.00, 1.0 } },
     { id = "bt_cost",      name = "节能模式",  color = { 0.80, 0.40, 1.00, 1.0 } },
     { id = "bt_graze",     name = "危险舞者",  color = { 0.80, 0.40, 1.00, 1.0 } },
@@ -154,6 +155,7 @@ function M.reapplyBuffs()
     -- 重置到基础值
     p.orbitDamage     = 1
     p.maxOrbitBullets = 12
+    p.energyMaxMult   = 1.0
     p.energyRegenMult = 1.0
     p.energyCostMult  = 1.0
     p.grazeEnergyMult = 1.0
@@ -167,6 +169,7 @@ function M.reapplyBuffs()
         for _ = 1, count do
             if id == "orbit_dmg"    then p.orbitDamage = p.orbitDamage + 1
             elseif id == "orbit_layers" then p.maxOrbitBullets = (p.maxOrbitBullets or 12) + 4
+            elseif id == "bt_cap"       then p.energyMaxMult = p.energyMaxMult * 1.3
             elseif id == "bt_regen"     then p.energyRegenMult = p.energyRegenMult * 1.4
             elseif id == "bt_cost"      then p.energyCostMult = p.energyCostMult * 0.75
             elseif id == "bt_graze"     then p.grazeEnergyMult = p.grazeEnergyMult * 1.5
@@ -215,11 +218,12 @@ function M.draw(vg, W, H)
     -- 计算面板高度
     local rowH = 28
     local sectionH = #SLOT_SECTIONS * rowH
-    -- buff 区域
+    -- buff 区域：标题(22) + 每个buff tag(28) + 添加dropdown(28) + 间距(12)
     local buffCount = 0
     for _, c in pairs(buffCounts_) do if c > 0 then buffCount = buffCount + 1 end end
-    local buffAreaH = math.max(30, (buffCount + 1) * 28 + 8)
-    local panelH = 44 + sectionH + 14 + buffAreaH + 44
+    local buffAreaH = 22 + buffCount * 28 + 28 + 12
+    -- 面板总高 = 标题(44) + 槽位区 + 分隔间距(14) + buff区 + 底部按钮区(50)
+    local panelH = 44 + sectionH + 14 + buffAreaH + 50
 
     -- 面板背景
     Components.drawPanel(vg, panelX, panelY, panelW, panelH, { dark = true })
@@ -332,7 +336,7 @@ function M.draw(vg, W, H)
     end
 
     -- ═══ 底部按钮 ═══
-    local btnY = panelY + panelH - 34
+    local btnY = panelY + panelH - 42
     -- 重置全部按钮
     local resetRect = Components.drawButton(vg, panelX + panelW * 0.35, btnY, "Reset All", { variant = "accent", w = 80 })
     clickTargets_[#clickTargets_ + 1] = { type = "btn_reset", rect = resetRect }

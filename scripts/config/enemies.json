@@ -1,0 +1,61 @@
+{
+  "scout": {
+    "radius": 14,
+    "hp": 1,
+    "speed": 90,
+    "color": [0.85, 0.6, 0.1],
+    "attack": {
+      "interval": 2.0,
+      "bulletCount": 1,
+      "bulletSpread": 0,
+      "bulletSpeed": 200,
+      "bulletDamage": 1
+    }
+  },
+  "heavy": {
+    "radius": 22,
+    "hp": 3,
+    "speed": 50,
+    "color": [0.6, 0.2, 0.8],
+    "attack": {
+      "interval": 3.0,
+      "bulletCount": 3,
+      "bulletSpread": 18,
+      "bulletSpeed": 160,
+      "bulletDamage": 1
+    }
+  },
+  "sniper": {
+    "radius": 12,
+    "hp": 2,
+    "speed": 70,
+    "color": [0.9, 0.15, 0.3],
+    "attack": {
+      "interval": 4.0,
+      "bulletCount": 1,
+      "bulletSpread": 0,
+      "bulletSpeed": 380,
+      "bulletDamage": 2
+    }
+  },
+  "laser": {
+    "radius": 16,
+    "hp": 4,
+    "speed": 30,
+    "color": [0.7, 0.0, 0.1],
+    "attack": {
+      "interval": 6.0,
+      "bulletCount": 0,
+      "bulletSpread": 0,
+      "bulletSpeed": 0,
+      "bulletDamage": 0
+    },
+    "laser": {
+      "chargeTime": 1.5,
+      "fireTime": 1.2,
+      "damage": 1,
+      "width": 8,
+      "range": 500
+    }
+  }
+}

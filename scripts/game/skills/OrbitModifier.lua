@@ -3,81 +3,40 @@
 -- 根据 SkillState.orbit.form 修改轨道子弹行为
 -- ============================================================================
 
-local SkillState = require "game.SkillState"
+local SkillState   = require "game.SkillState"
+local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
 
--- ═══ 形态配置 ═══
+-- ═══ 从 JSON 加载形态配置 ═══
 
-local FORM_DEFAULT = { id = "default" }
+local function loadForms()
+    local data = ConfigLoader.load("config/characters/protagonist.json")
+    if not data or not data.skills or not data.skills.orbit then
+        print("[OrbitModifier] WARN: 无法加载轨道配置")
+        return { [1] = { id = "default" } }
+    end
 
--- O-1: 环刃吟霜（刀刃轨道）
-local FORM_BLADE = {
-    id = "blade",
-    durability   = 3,       -- 碰撞 3 次后消耗
-    dmgMult      = 1.3,     -- 碰撞伤害倍率
-    -- 等级加成
-    levelBonus = {
-        [2] = { durability = 4 },
-        [3] = { durability = 4, dmgMult = 1.8 },
-        [4] = { durability = 4, dmgMult = 1.8, explodeOnBreak = true, explodeRadius = 40, explodeDmgMult = 1.5 },
-        [5] = { durability = 4, dmgMult = 1.8, explodeOnBreak = true, explodeRadius = 40, explodeDmgMult = 1.5, slowOnHit = 0.7, slowDuration = 1.0 },
-    },
-}
+    local orbitCfg = data.skills.orbit
+    local forms = { [1] = { id = "default" } }
 
--- O-2: 潮汐寐息（脉冲轨道）
-local FORM_PULSE = {
-    id = "pulse",
-    pulsePeriod   = 3.0,     -- 脉冲周期
-    pulseMinR     = 48,      -- 起始扩张半径
-    pulseMaxR     = 120,     -- 最大扩张半径
-    pulseExpandT  = 0.3,     -- 膨胀时间
-    pulseRetractT = 0.2,     -- 收回时间
-    pulseDmgBase  = 2,       -- 基础伤害
-    pulseDmgPerBullet = 0.2, -- 每颗弹加成
-    pulseCost     = 1,       -- 每次脉冲消耗弹数
-    -- 等级加成
-    levelBonus = {
-        [2] = { pulsePeriod = 2.0 },
-        [3] = { pulsePeriod = 2.0, pulseMaxR = 160 },
-        [4] = { pulsePeriod = 2.0, pulseMaxR = 160, knockback = 40 },
-        [5] = { pulsePeriod = 2.0, pulseMaxR = 160, knockback = 40, noCost = true },
-    },
-}
+    local function convertLevelBonus(raw)
+        if not raw or not raw.levelBonus then return raw end
+        local lb = {}
+        for k, v in pairs(raw.levelBonus) do lb[tonumber(k)] = v end
+        raw.levelBonus = lb
+        return raw
+    end
 
--- O-3: 繁星共语（共鸣轨道）
-local FORM_RESONANCE = {
-    id = "resonance",
-    coeff = 0.08,           -- 每颗加成系数
-    -- 等级加成
-    levelBonus = {
-        [2] = { coeff = 0.12 },
-        [3] = { coeff = 0.12, pierceAt15 = true },
-        [4] = { coeff = 0.12, pierceAt15 = true, fullBurstRadius = 80, fullBurstDmg = 0.5 },
-        [5] = { coeff = 0.12, pierceAt15 = true, fullBurstRadius = 80, fullBurstDmg = 0.5, qteBonusMult = 0.20 },
-    },
-}
+    local order = { "blade", "pulse", "resonance", "shield" }
+    for i, name in ipairs(order) do
+        local cfg = orbitCfg[name]
+        if cfg then forms[i + 1] = convertLevelBonus(cfg) end
+    end
+    return forms
+end
 
--- O-4: 薄翼守梦（护盾轨道）
-local FORM_SHIELD = {
-    id = "shield",
-    shieldHP = 1,           -- 每颗护盾值
-    -- 等级加成
-    levelBonus = {
-        [2] = { shieldHP = 2 },
-        [3] = { shieldHP = 2, reflect = true, reflectDmgMult = 0.5 },
-        [4] = { shieldHP = 2, reflect = true, reflectDmgMult = 0.5, regen = true, regenInterval = 5.0 },
-        [5] = { shieldHP = 2, reflect = true, reflectDmgMult = 0.5, regen = true, regenInterval = 5.0, energyPerBlock = 0.03 },
-    },
-}
-
-local FORMS = {
-    [1] = FORM_DEFAULT,
-    [2] = FORM_BLADE,
-    [3] = FORM_PULSE,
-    [4] = FORM_RESONANCE,
-    [5] = FORM_SHIELD,
-}
+local FORMS = loadForms()
 
 -- ═══ 脉冲状态 ═══
 local pulseState_ = {
@@ -110,7 +69,7 @@ end
 function M.getFormConfig()
     local form = SkillState.getForm("orbit")
     local level = SkillState.getLevel("orbit")
-    local base = FORMS[form] or FORM_DEFAULT
+    local base = FORMS[form] or FORMS[1]
     if base.id == "default" then return base end
 
     local cfg = {}

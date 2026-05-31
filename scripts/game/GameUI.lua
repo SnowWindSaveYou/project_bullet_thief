@@ -495,11 +495,18 @@ function drawButtons(p)
 
     -- BT（闪避/子弹时间）按钮（左下）
     local btActive = InputH.isBulletTimeHeld()
-    local btDisabled = (p.energy or 0) < 0.05  -- 能量不足时变透明
+    local Player = require("game.Player")
+    local enCFG = Player.getCFG().energy
+    local enMax = enCFG.max * (p.energyMaxMult or 1)
+    local enRatio = (p.energy or 0) / enMax             -- 归一化 0~1
+    local btDisabled = (p.energy or 0) < enCFG.minToStart
+    local baseRatio = enCFG.max / enMax                 -- 基础容量占比
     Comp.drawCircleButton(vg_, btBtn.x, btBtn.y, btBtn.r, "BT", {
         active    = btActive,
-        fillRatio = p.energy,
+        fillRatio = enRatio,
         arcColor  = Theme.colors.energyCyan,
+        overflowColor = {0.7, 0.3, 1.0},               -- 溢出紫色
+        overflowStart = baseRatio,                      -- 超出此比例为溢出段
         icon      = iconDodge_,
         disabled  = btDisabled,
     })

@@ -8,6 +8,8 @@ local ShotHandler   = require "game.skills.ShotHandler"
 local OrbitModifier = require "game.skills.OrbitModifier"
 local QTEHandler    = require "game.skills.QTEHandler"
 
+local ConfigLoader = require "config.ConfigLoader"
+
 local M = {}
 
 local W_, H_ = 0, 0
@@ -25,17 +27,56 @@ local bullets_ = {}
 ---@type table[]
 local orbitBullets_ = {}
 
--- 轨道配置
-local ORBIT_CFG = {
-    baseRadius   = 48,
-    radiusStep   = 22,
-    perLayer     = 12,
-    collectSpeed = 320,  -- 夺取时飞向玩家的速度
-}
+-- 轨道配置（从 JSON 延迟加载）
+local ORBIT_CFG = nil
+
+local function loadOrbitCfg()
+    if ORBIT_CFG then return ORBIT_CFG end
+    local data = ConfigLoader.load("config/bullet.json")
+    if data and data.orbit then
+        ORBIT_CFG = data.orbit
+        print("[BulletManager] 从 JSON 加载轨道配置")
+    end
+    if not ORBIT_CFG then
+        print("[BulletManager] WARN: JSON 加载失败，使用内置默认值")
+        ORBIT_CFG = {
+            baseRadius = 48, radiusStep = 22, perLayer = 12,
+            collectSpeed = 600, collectLerp = 14, collectMinSpd = 80,
+        }
+    end
+    return ORBIT_CFG
+end
+
+-- 射击配置（从 JSON 延迟加载）
+local FIRE_CFG = nil
+
+local function loadFireCfg()
+    if FIRE_CFG then return FIRE_CFG end
+    local data = ConfigLoader.load("config/bullet.json")
+    if data and data.fireTiers then
+        FIRE_CFG = { tiers = data.fireTiers, speed = data.fireSpeed or 420 }
+        print("[BulletManager] 从 JSON 加载射击配置 (" .. #FIRE_CFG.tiers .. " 档位)")
+    end
+    if not FIRE_CFG then
+        print("[BulletManager] WARN: 射击配置加载失败，使用内置默认值")
+        FIRE_CFG = {
+            tiers = {
+                { maxBullets = 3,   interval = 0.28, perShot = 1, spread = 0 },
+                { maxBullets = 8,   interval = 0.18, perShot = 1, spread = 0 },
+                { maxBullets = 15,  interval = 0.14, perShot = 2, spread = 0.18 },
+                { maxBullets = 999, interval = 0.10, perShot = 3, spread = 0.25 },
+            },
+            speed = 420,
+        }
+    end
+    return FIRE_CFG
+end
 
 function M.init(_W, _H)
     W_ = _W
     H_ = _H
+    loadOrbitCfg()
+    loadFireCfg()
     ShotHandler.init()
     OrbitModifier.init()
     QTEHandler.init()
@@ -45,6 +86,7 @@ end
 function M.reset()
     bulletPool_:drain(bullets_)
     orbitPool_:drain(orbitBullets_)
+    absorbRings_ = {}
     ShotHandler.resetLaser()
     OrbitModifier.resetPulse()
     QTEHandler.resetBeam()
@@ -136,6 +178,14 @@ function M.spawnPlayerBullet(x, y, angle, speed, opts)
 end
 
 -- ——— 夺取子弹（变为轨道子弹） ———
+-- ——— 吸收脉冲环（子弹归位时触发） ———
+local absorbRings_ = {}
+local ABSORB_RING_DURATION = 0.35
+
+local function spawnAbsorbRing(x, y)
+    absorbRings_[#absorbRings_ + 1] = { x = x, y = y, age = 0 }
+end
+
 function M.stealBullet(idx)
     local b = bullets_[idx]
     if not b or b.dead then return end
@@ -148,6 +198,9 @@ function M.stealBullet(idx)
     ob.collecting  = true     -- 正在飞向轨道
     ob.x           = b.x
     ob.y           = b.y
+    ob.startX      = b.x     -- 记录起始位置（用于吸收线绘制）
+    ob.startY      = b.y
+    ob.collectAge  = 0        -- collecting 经过的时间（用于缩放动画）
     ob.layer       = 0
     ob.indexInLayer = 0
     ob.targetAngle = 0
@@ -238,23 +291,13 @@ function M.removeOrbitBullet(idx)
     end
 end
 
--- ——— 新发射系统：按持有数量决定射速和多发 ———
-local FIRE_CFG = {
-    -- 射速档位（按轨道子弹数）
-    tiers = {
-        { maxBullets = 3,  interval = 0.28, perShot = 1, spread = 0    },
-        { maxBullets = 8,  interval = 0.18, perShot = 1, spread = 0    },
-        { maxBullets = 15, interval = 0.14, perShot = 2, spread = 0.18 },  -- ~10°
-        { maxBullets = 999,interval = 0.10, perShot = 3, spread = 0.25 },  -- ~14°
-    },
-    speed = 420,
-}
+-- ——— 新发射系统（FIRE_CFG 已在文件头部加载） ———
 local fireCooldown_ = 0  -- 发射冷却计时器
 local wasFireHeld_ = false  -- 上一帧是否按住发射
 
 -- ——— QTE 全弹爆发系统 ———
 local QTE_CFG = {
-    window      = 1.5,    -- QTE 窗口持续时间（秒）
+    window      = 0.9,    -- QTE 窗口持续时间（秒）
     burstDelay  = 0.03,   -- 爆发时每颗子弹间隔
     speedMult   = 1.8,    -- 爆发子弹速度倍率
     baseDmgMult = 1.5,    -- 基础伤害倍率
@@ -542,6 +585,7 @@ function M.update(dt, realDt)
             ob.colorT = math.min(1, ob.colorT + realDt * 3)
         end
         if ob.collecting then
+            ob.collectAge = (ob.collectAge or 0) + realDt
             local tx, ty = M.getOrbitBulletPos(ob, player.x, player.y, player.orbitAngle)
             local dx = tx - ob.x
             local dy = ty - ob.y
@@ -550,15 +594,44 @@ function M.update(dt, realDt)
                 ob.collecting = false
                 ob.x = tx
                 ob.y = ty
+                -- 到位时触发吸收脉冲环
+                spawnAbsorbRing(tx, ty)
             else
-                local spd = ORBIT_CFG.collectSpeed * realDt
-                ob.x = ob.x + (dx / dist) * math.min(spd, dist)
-                ob.y = ob.y + (dy / dist) * math.min(spd, dist)
+                -- 原地停顿 → 缓动lerp追踪：
+                -- 前 0.20s 完全静止（让玩家看到"这颗子弹被捕获了"）
+                -- 之后 lerp 追踪：quartic ease-in 让前期更柔和，后期猛追
+                local age = ob.collectAge or 0
+                local holdTime = 0.20
+                local rampTime = 0.35
+                if age > holdTime then
+                    local t = math.min(1, (age - holdTime) / rampTime)
+                    local easedT = t * t * t * t  -- quartic ease-in：开始更慢，后期更猛
+                    -- lerp 插值（百分比逼近，越远越快，保证收敛）
+                    local lerpFactor = 1 - math.exp(-ORBIT_CFG.collectLerp * easedT * realDt)
+                    local lerpStep = dist * lerpFactor
+                    -- 缓动保底速度（随 easing 增长）
+                    local easedMinStep = ORBIT_CFG.collectSpeed * easedT * realDt
+                    -- 绝对最低速度（不受 easing 影响，防止近距离/早期粘滞）
+                    local floorStep = ORBIT_CFG.collectMinSpd * realDt
+                    local step = math.max(lerpStep, easedMinStep, floorStep)
+                    step = math.min(step, dist)  -- 不超过实际距离
+                    ob.x = ob.x + (dx / dist) * step
+                    ob.y = ob.y + (dy / dist) * step
+                end
             end
         else
             local tx, ty = M.getOrbitBulletPos(ob, player.x, player.y, player.orbitAngle)
             ob.x = tx
             ob.y = ty
+        end
+    end
+
+    -- ——— 吸收脉冲环更新 ———
+    for i = #absorbRings_, 1, -1 do
+        local ring = absorbRings_[i]
+        ring.age = ring.age + realDt
+        if ring.age >= ABSORB_RING_DURATION then
+            table.remove(absorbRings_, i)
         end
     end
 
@@ -690,9 +763,10 @@ function M.update(dt, realDt)
         qteState_.flashAlpha = math.max(0, qteState_.flashAlpha - realDt * 4)
     end
 
-    -- 处理常规发射（QTE 窗口/爆发期间禁止常规发射）
+    -- 处理常规发射（QTE 爆发期间禁止；QTE 窗口中若玩家从BT就按住则允许继续攻击）
     fireCooldown_ = fireCooldown_ - dt
-    if not qteState_.active and not qteState_.bursting then
+    local qteBlocksFire = qteState_.bursting or (qteState_.active and not qteState_.needRelease)
+    if not qteBlocksFire then
         -- ——— 激光模式特殊处理 ———
         if ShotHandler.isLaserMode() then
             local fireAngle, _ = PlayerMod.getFireDirection()
@@ -886,6 +960,26 @@ function M.draw(vg)
     -- 绘制轨道子弹
     for _, ob in ipairs(orbitBullets_) do
         drawOrbitBullet(vg, ob)
+    end
+
+    -- 绘制吸收脉冲环
+    for _, ring in ipairs(absorbRings_) do
+        local progress = ring.age / ABSORB_RING_DURATION
+        local radius = 8 + progress * 24       -- 从 8 扩散到 32
+        local alpha = 0.7 * (1 - progress)     -- 渐隐
+        nvgBeginPath(vg)
+        nvgCircle(vg, ring.x, ring.y, radius)
+        nvgStrokeColor(vg, nvgRGBAf(0.4, 0.95, 1.0, alpha))
+        nvgStrokeWidth(vg, 2.0 * (1 - progress * 0.5))
+        nvgStroke(vg)
+        -- 内圈亮闪
+        if progress < 0.3 then
+            local innerA = 0.5 * (1 - progress / 0.3)
+            nvgBeginPath(vg)
+            nvgCircle(vg, ring.x, ring.y, 6 * (1 - progress))
+            nvgFillColor(vg, nvgRGBAf(0.8, 1.0, 1.0, innerA))
+            nvgFill(vg)
+        end
     end
 
     -- 方向指示：始终显示小白箭头，开火时加虚线+锁定
@@ -1120,21 +1214,87 @@ function drawOrbitBullet(vg, ob)
         fb = math.min(1, fb + flash)
     end
 
+    -- ——— collecting 阶段：吸收光带 + 缩放弹跳 ———
+    local scale = 1.0
+    if ob.collecting then
+        local age = ob.collectAge or 0
+        local holdTime = 0.20
+        -- flyProgress: 0=刚开始飞, 1=快到位（用于光带/拖尾淡出）
+        local flyProgress = 0
+        -- 缩放与停顿同步：
+        -- 0~0.20s 停顿期：维持 1.8x（"我被捕获了"的视觉标记）
+        -- 0.20s+ 飞行期：从 1.8x 缩回 1.0x
+        if age <= holdTime then
+            scale = 1.8
+        else
+            flyProgress = math.min(1, (age - holdTime) / 0.35)
+            scale = 1.8 - 0.8 * flyProgress  -- 1.8 → 1.0
+        end
+
+        -- 吸收光带：从子弹到玩家方向的渐变线
+        local player = require("game.Player").getData()
+        local dx = player.x - ob.x
+        local dy = player.y - ob.y
+        local dist = math.sqrt(dx * dx + dy * dy)
+        if dist > 12 then
+            local lineAlpha = 0.6 * (1 - flyProgress * 0.5)  -- 逐渐减弱
+            -- 光带主线（宽渐变）
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, ob.x, ob.y)
+            nvgLineTo(vg, ob.x + dx * 0.7, ob.y + dy * 0.7)
+            nvgStrokeColor(vg, nvgRGBAf(fr, fg, fb, lineAlpha * 0.5))
+            nvgStrokeWidth(vg, 3.0)
+            nvgLineCap(vg, NVG_ROUND)
+            nvgStroke(vg)
+            -- 光带核心（细亮线）
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, ob.x, ob.y)
+            nvgLineTo(vg, ob.x + dx * 0.5, ob.y + dy * 0.5)
+            nvgStrokeColor(vg, nvgRGBAf(1.0, 1.0, 1.0, lineAlpha * 0.8))
+            nvgStrokeWidth(vg, 1.2)
+            nvgStroke(vg)
+        end
+
+        -- 拖尾：飞行阶段在运动反方向画短弧光
+        if age > holdTime then
+            local sx = ob.startX or ob.x
+            local sy = ob.startY or ob.y
+            local tailDx = ob.x - sx
+            local tailDy = ob.y - sy
+            local tailDist = math.sqrt(tailDx * tailDx + tailDy * tailDy)
+            if tailDist > 5 then
+                local tailLen = math.min(20, tailDist * 0.3)
+                local nx = -tailDx / tailDist
+                local ny = -tailDy / tailDist
+                nvgBeginPath(vg)
+                nvgMoveTo(vg, ob.x, ob.y)
+                nvgLineTo(vg, ob.x + nx * tailLen, ob.y + ny * tailLen)
+                nvgStrokeColor(vg, nvgRGBAf(fr, fg, fb, 0.4 * (1 - flyProgress)))
+                nvgStrokeWidth(vg, 2.5 * scale)
+                nvgLineCap(vg, NVG_ROUND)
+                nvgStroke(vg)
+            end
+        end
+    end
+
+    local r = 7 * scale
+    local glowR = 11 * scale
+
     -- 外发光
     nvgBeginPath(vg)
-    nvgCircle(vg, ob.x, ob.y, 11)
-    nvgFillColor(vg, nvgRGBAf(fr, fg, fb, 0.2))
+    nvgCircle(vg, ob.x, ob.y, glowR)
+    nvgFillColor(vg, nvgRGBAf(fr, fg, fb, 0.2 + (scale - 1) * 0.15))
     nvgFill(vg)
 
     -- 主体
     nvgBeginPath(vg)
-    nvgCircle(vg, ob.x, ob.y, 7)
+    nvgCircle(vg, ob.x, ob.y, r)
     nvgFillColor(vg, nvgRGBAf(fr, fg, fb, fa))
     nvgFill(vg)
 
     -- 描边
     nvgBeginPath(vg)
-    nvgCircle(vg, ob.x, ob.y, 7)
+    nvgCircle(vg, ob.x, ob.y, r)
     nvgStrokeColor(vg, nvgRGBAf(0.7, 1.0, 1.0, 0.8))
     nvgStrokeWidth(vg, 1.5)
     nvgStroke(vg)

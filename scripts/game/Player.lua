@@ -2,47 +2,57 @@
 -- Player.lua - 玩家数据 + 更新 + 绘制
 -- ============================================================================
 
-local Renderer   = require "game.Renderer"
-local Input      = require "game.InputHandler"
-local Tween      = require "lib.Tween"
-local Xingye     = require "game.characters.Xingye"
-local SkillState = require "game.SkillState"
+local Renderer     = require "game.Renderer"
+local Input        = require "game.InputHandler"
+local Tween        = require "lib.Tween"
+local Xingye       = require "game.characters.Xingye"
+local SkillState   = require "game.SkillState"
+local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
 
 -- 地图边距（与 Renderer.drawMapBoundary 一致）
 local MAP_MARGIN = 28
 
--- ——— 配置 ———
-local CFG = {
-    radius       = 18,
-    grazeRadius  = 42,
-    speed        = 280,          -- 逻辑像素/秒
-    maxHp        = 100,
-    energy       = {
-        max         = 1.0,
-        regenRate   = 0.06,       -- 每秒恢复
-        btCostRate  = 0.18,       -- 子弹时间每秒消耗
-        minToStart  = 0.25,       -- 最低开启阈值
-        cooldown    = 1.5,        -- 退出后冷却
-    },
-    -- B线偷取范围 (设计文档数值)
-    stealRadiusBase = 18,             -- 基础偷取半径 = player.radius（无B线）
-    stealRadiusByLevel = { 48, 64, 96 },  -- B1/B2/B3 偷取判定半径
-    stealSlowFactor = 0.85,           -- B2+ 范围内子弹减速倍率
-    stealDeflectDeg = 5,              -- B3 范围内子弹每帧偏转角度
+-- ——— 配置（从 JSON 加载） ———
+local function loadCFG()
+    local data = ConfigLoader.load("config/characters/protagonist.json")
+    if not data then
+        print("[Player] WARN: 无法加载角色配置，使用兜底值")
+        return {
+            radius = 18, grazeRadius = 42, speed = 280, maxHp = 100,
+            energy = { max = 3.0, regenRate = 1.0, btCostRate = 1.0, minToStart = 1.0, cooldown = 0 },
+            stealRadiusBase = 18, stealRadiusByLevel = { 48, 64, 96 },
+            stealSlowFactor = 0.85, stealDeflectDeg = 5,
+            orbitRadius = 48, orbitRadiusStep = 22, orbitPerLayer = 12,
+            orbitAngularSpeed = 2.4, orbitDamage = 1,
+        }
+    end
+    return data.base
+end
 
-    orbitRadius  = 48,            -- 轨道半径（第一圈）
-    orbitRadiusStep = 22,         -- 每圈额外半径
-    orbitPerLayer = 12,           -- 每层最多多少颗
-    orbitAngularSpeed = 2.4,      -- 轨道旋转速度（rad/s）
-    orbitDamage  = 1,
-}
+local CFG = loadCFG()
 
 ---@type table
 local data = {}
 
 local W_, H_ = 0, 0
+
+-- BT 结束回调列表
+local btEndCallbacks_ = {}
+
+--- 注册 BT 结束回调（D线光束释放等）
+---@param fn fun()
+function M.onBTEnd(fn)
+    btEndCallbacks_[#btEndCallbacks_ + 1] = fn
+end
+
+--- 内部：触发所有 BT 结束回调
+local function fireBTEnd()
+    for _, fn in ipairs(btEndCallbacks_) do
+        fn()
+    end
+end
 
 function M.init(_W, _H)
     W_ = _W
@@ -61,7 +71,7 @@ function M.reset(_W, _H)
         stealRadius   = CFG.stealRadiusBase,  -- 动态: 受B线等级影响
         hp            = CFG.maxHp,
         maxHp         = CFG.maxHp,
-        energy        = 0.5,
+        energy        = CFG.energy.max,
         energyCooldown = 0,
         bulletTimeActive = false,
         orbitAngle    = 0,
@@ -73,6 +83,8 @@ function M.reset(_W, _H)
         speedMult     = 1.0,
         orbitDamageMult = 1.0,
         energyRegenMult = 1.0,
+        energyCostMult  = 1.0,
+        energyMaxMult   = 1.0,
         -- 视觉动画
         hitFlash      = 0,
         btPulse       = 0,
@@ -87,6 +99,10 @@ end
 
 function M.getData()
     return data
+end
+
+function M.getCFG()
+    return CFG
 end
 
 function M.update(dt)
@@ -123,12 +139,15 @@ function M.update(dt)
 
     -- 3. 能量系统
     local enCFG = CFG.energy
+    -- 动态能量上限 = 基础上限 × 成长倍率
+    local energyMax = enCFG.max * (data.energyMaxMult or 1)
     if data.bulletTimeActive then
-        data.energy = data.energy - enCFG.btCostRate * dt
+        data.energy = data.energy - enCFG.btCostRate * (data.energyCostMult or 1) * dt
         if data.energy <= 0 then
             data.energy = 0
             data.bulletTimeActive = false
             data.energyCooldown   = enCFG.cooldown
+            fireBTEnd()
             print("[Player] 子弹时间: 能量耗尽，进入冷却")
         end
     else
@@ -136,8 +155,8 @@ function M.update(dt)
         if data.energyCooldown > 0 then
             data.energyCooldown = data.energyCooldown - dt
         else
-            data.energy = math.min(enCFG.max,
-                data.energy + enCFG.regenRate * data.energyRegenMult * dt)
+            data.energy = math.min(energyMax,
+                data.energy + enCFG.regenRate * (data.energyRegenMult or 1) * dt)
         end
         -- 检测开启子弹时间
         if Input.isBulletTimeHeld()
@@ -145,11 +164,6 @@ function M.update(dt)
             and data.energyCooldown <= 0 then
             data.bulletTimeActive = true
             print("[Player] 子弹时间: 开启")
-        end
-        -- 解除（松开按键）
-        if data.bulletTimeActive and not Input.isBulletTimeHeld() then
-            data.bulletTimeActive = false
-            print("[Player] 子弹时间: 手动关闭")
         end
     end
 
@@ -196,7 +210,8 @@ end
 
 -- 加能量
 function M.addEnergy(amount)
-    data.energy = math.min(CFG.energy.max, data.energy + amount)
+    local energyMax = CFG.energy.max * (data.energyMaxMult or 1)
+    data.energy = math.min(energyMax, data.energy + amount)
 end
 
 -- 夺取子弹（动画由 BulletManager 处理，这里只触发视觉）
@@ -210,7 +225,7 @@ function M.addCoins(n)
 end
 
 -- ——— 自动瞄准系统 ———
-local LOCK_RADIUS = 180  -- 自动锁定半径（逻辑像素）
+local LOCK_RADIUS = 260  -- 自动锁定半径（逻辑像素）
 local LOCK_STICKY_TIME = 0.15  -- 锁定粘滞时间（秒），防抖动切换
 local lockTarget_ = nil  -- 当前锁定的敌人引用
 local lockTimer_  = 0    -- 粘滞计时器
@@ -247,7 +262,7 @@ function M.getFireDirection()
     end
 
     -- 粘滞逻辑：如果当前有锁定目标且仍在范围内，短时间内不切换
-    if lockTarget_ and not lockTarget_.dead then
+    if lockTarget_ and not lockTarget_.dead and lockTarget_.x then
         local dx = lockTarget_.x - data.x
         local dy = lockTarget_.y - data.y
         local dist = math.sqrt(dx * dx + dy * dy)
@@ -315,7 +330,8 @@ function M.draw(vg)
     Xingye.draw(vg, p.x, p.y, p.radius, p.hitFlash, p.age, p.dir, p.face_yaw)
 
     -- 能量环（外圈弧线）
-    drawEnergyRing(vg, p.x, p.y, p.radius + 8, p.energy,
+    local enMax = CFG.energy.max * (p.energyMaxMult or 1)
+    drawEnergyRing(vg, p.x, p.y, p.radius + 8, p.energy, enMax,
         p.bulletTimeActive, p.energyCooldown)
 
     -- 自动锁定范围（白色虚线圆环）
@@ -343,42 +359,61 @@ function drawHexagon(vg, cx, cy, r, fr, fg, fb, sr, sg, sb)
     nvgStroke(vg)
 end
 
--- 绘制能量环
-function drawEnergyRing(vg, cx, cy, r, energy, btActive, cooldown)
-    local arc = energy * math.pi * 2
+-- 绘制能量环（双色：基础青色 + 溢出紫色）
+function drawEnergyRing(vg, cx, cy, r, energy, energyMax, btActive, cooldown)
+    local baseMax = CFG.energy.max          -- 初始上限（3秒）
+    local ratio = energy / energyMax        -- 归一化 0~1
+    local fullArc = math.pi * 2
 
-    -- 背景环（暗灰）
+    -- 背景环（暗灰满圈）
     nvgBeginPath(vg)
     nvgArc(vg, cx, cy, r, -math.pi * 0.5, math.pi * 1.5, NVG_CW)
     nvgStrokeColor(vg, nvgRGBAf(0.2, 0.2, 0.3, 0.5))
     nvgStrokeWidth(vg, 3.5)
     nvgStroke(vg)
 
-    if arc < 0.05 then return end
+    if ratio < 0.01 then return end
 
-    -- 能量弧
+    -- 颜色选择
     local er, eg, eb, ea
     if cooldown > 0 then
-        -- 冷却中：灰色闪烁
         local flicker = 0.4 + math.abs(math.sin(cooldown * 8)) * 0.3
         er, eg, eb, ea = 0.35, 0.35, 0.4, flicker
     elseif btActive then
-        -- 子弹时间：亮青色
         er, eg, eb, ea = 0.3, 1.0, 0.9, 1.0
-    elseif energy < 0.25 then
-        -- 低能量：暗橙
+    elseif ratio < 0.33 then
         er, eg, eb, ea = 0.8, 0.4, 0.1, 0.8
     else
-        -- 正常：青色
         er, eg, eb, ea = 0.3, 0.85, 0.95, 0.9
     end
 
+    -- 计算基础段和溢出段
+    local baseRatio = baseMax / energyMax   -- 基础容量占满圈的比例
+    local baseFill = math.min(ratio, baseRatio) / baseRatio  -- 基础段填充 0~1
+    local baseArc = baseFill * baseRatio * fullArc
+
+    -- 绘制基础段（青色）
     nvgBeginPath(vg)
-    nvgArc(vg, cx, cy, r, -math.pi * 0.5, -math.pi * 0.5 + arc, NVG_CW)
+    nvgArc(vg, cx, cy, r, -math.pi * 0.5, -math.pi * 0.5 + baseArc, NVG_CW)
     nvgStrokeColor(vg, nvgRGBAf(er, eg, eb, ea))
     nvgStrokeWidth(vg, 3.5)
     nvgLineCap(vg, NVG_ROUND)
     nvgStroke(vg)
+
+    -- 溢出段（紫色，仅在有升级且能量超过基础上限时显示）
+    if energyMax > baseMax and energy > baseMax then
+        local overflowRatio = (energy - baseMax) / (energyMax - baseMax)  -- 溢出部分填充 0~1
+        local overflowArc = overflowRatio * (1 - baseRatio) * fullArc
+        local startAngle = -math.pi * 0.5 + baseRatio * fullArc
+        nvgBeginPath(vg)
+        nvgArc(vg, cx, cy, r, startAngle, startAngle + overflowArc, NVG_CW)
+        -- 紫色：BT激活时更亮
+        local pa = btActive and 1.0 or 0.85
+        nvgStrokeColor(vg, nvgRGBAf(0.7, 0.3, 1.0, pa))
+        nvgStrokeWidth(vg, 3.5)
+        nvgLineCap(vg, NVG_ROUND)
+        nvgStroke(vg)
+    end
 end
 
 -- 绘制粗胶囊段虚线圆环（锁定范围）

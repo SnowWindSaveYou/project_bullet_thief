@@ -1,0 +1,36 @@
+{
+  "id": "dream_sovereign",
+  "name": "梦魔王",
+  "killThreshold": 500,
+  "radius": 44,
+  "hp": 100,
+  "speed": 35,
+  "phases": {
+    "phase1": {
+      "bulletHell": {
+        "interval": 1.8,
+        "count": 8,
+        "speed": 170
+      },
+      "laser": {
+        "interval": 8.0,
+        "chargeTime": 1.2,
+        "fireTime": 1.0,
+        "width": 12,
+        "range": 550
+      }
+    },
+    "phase2": {
+      "burst": {
+        "interval": 3.0,
+        "count": 16,
+        "speed": 130
+      }
+    }
+  },
+  "summon": {
+    "interval": 10.0,
+    "count": 3
+  },
+  "phaseTransTime": 2.0
+}

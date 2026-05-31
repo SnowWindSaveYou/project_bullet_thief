@@ -1,0 +1,21 @@
+{
+  "baseInterval": 1.8,
+  "difficultyScale": 0.015,
+  "maxDifficulty": 3.0,
+  "spawnCountFactor": 0.7,
+  "maxSpawnCount": 4,
+  "typeWeights": {
+    "early": {
+      "maxDifficulty": 2.0,
+      "weights": { "scout": 1.0 }
+    },
+    "mid": {
+      "maxDifficulty": 2.5,
+      "weights": { "scout": 0.5, "heavy": 0.3, "sniper": 0.2 }
+    },
+    "late": {
+      "maxDifficulty": 999,
+      "weights": { "scout": 0.3, "heavy": 0.3, "sniper": 0.2, "laser": 0.2 }
+    }
+  }
+}

@@ -3,108 +3,53 @@
 -- 根据 SkillState.shot.form 提供不同射击参数和子弹属性
 -- ============================================================================
 
-local SkillState = require "game.SkillState"
+local SkillState   = require "game.SkillState"
+local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
 
--- ═══ 各形态基础数值（来自设计文档） ═══
+-- ═══ 从 JSON 加载形态配置 ═══
 
--- 默认形态使用 BulletManager 的 FIRE_CFG（不覆盖）
-local FORM_DEFAULT = {
-    id = "default",
-}
+local function loadForms()
+    local data = ConfigLoader.load("config/characters/protagonist.json")
+    if not data or not data.skills or not data.skills.shot then
+        print("[ShotHandler] WARN: 无法加载射击配置，使用空配置")
+        return { [1] = { id = "default" } }
+    end
 
--- S-1: 流星坠夜（穿透速射）
-local FORM_PIERCE = {
-    id = "pierce",
-    interval = 0.08,        -- 射击间隔
-    speed    = 1050,        -- 弹速 px/s
-    perShot  = 1,
-    spread   = 0,
-    -- 子弹属性
-    pierce      = 2,        -- 穿透数（可升级）
-    pierceDecay = 0.20,     -- 穿透伤害衰减 20%/个
-    bulletRadius = 6,
-    bulletLife   = 2.5,
-    -- 等级加成
-    levelBonus = {
-        -- level 2: +1穿透
-        [2] = { pierce = 3 },
-        -- level 3: 穿透不衰减
-        [3] = { pierce = 3, pierceDecay = 0 },
-        -- level 4: 尾焰AOE + 弹速x3
-        [4] = { pierce = 4, pierceDecay = 0, speed = 1260 },
-        -- level 5: 全部加成
-        [5] = { pierce = 5, pierceDecay = 0, speed = 1260, endAoe = true },
-    },
-}
+    local shotCfg = data.skills.shot
+    local forms = { [1] = { id = "default" } }
 
--- S-2: 凝霜长吟（聚能激光）— 特殊机制，不改变 doFire
-local FORM_LASER = {
-    id = "laser",
-    -- 激光参数
-    chargeRate   = 3,       -- 蓄力速度（颗/s）
-    minCharge    = 3,       -- 最少消耗
-    maxCharge    = 10,      -- 最多消耗
-    durationMin  = 0.5,     -- 最短持续（3颗）
-    durationMax  = 1.5,     -- 最长持续（10颗）
-    widthMin     = 8,       -- 最窄宽度（3颗）
-    widthMax     = 32,      -- 最宽宽度（10颗）
-    dpsPerBullet = 2,       -- 每消耗颗 = 2 DPS
-    -- 等级加成
-    levelBonus = {
-        [2] = { widthMax = 40 },
-        [3] = { widthMax = 48, chargeRate = 5 },
-        [4] = { widthMax = 48, chargeRate = 5, reflect = true },
-        [5] = { widthMax = 48, chargeRate = 5, reflect = true, overcharge = true },
-    },
-}
+    -- 转换 JSON levelBonus 的字符串 key 为数字 key
+    local function convertLevelBonus(raw)
+        if not raw or not raw.levelBonus then return raw end
+        local lb = {}
+        for k, v in pairs(raw.levelBonus) do
+            lb[tonumber(k)] = v
+        end
+        raw.levelBonus = lb
+        return raw
+    end
 
--- S-3: 碎梦飞花（溅射弹幕）
-local FORM_SPLASH = {
-    id = "splash",
-    -- 使用默认射速档位（不覆盖 interval/perShot）
-    splashCount   = 4,      -- 溅射弹片数
-    splashDmgMult = 0.4,    -- 弹片伤害 = 主弹 × 0.4
-    splashRadius  = 50,     -- 溅射半径
-    splashRange   = 80,     -- 弹片飞行距离
-    -- 等级加成
-    levelBonus = {
-        [2] = { splashCount = 6 },
-        [3] = { splashCount = 6, splashRadius = 75 },
-        [4] = { splashCount = 6, splashRadius = 75, chain = 0.3 },
-        [5] = { splashCount = 8, splashRadius = 75, chain = 0.3, slow = true },
-    },
-}
+    -- 加载各形态，保持顺序与 SkillState 一致
+    local order = { "pierce", "laser", "splash", "shotgun" }
+    for i, name in ipairs(order) do
+        local cfg = shotCfg[name]
+        if cfg then
+            cfg = convertLevelBonus(cfg)
+            -- 散弹的 spreadDeg 转为弧度
+            if cfg.spreadDeg then
+                cfg.spread = math.rad(cfg.spreadDeg)
+                cfg.spreadDeg = nil
+            end
+            forms[i + 1] = cfg
+        end
+    end
 
--- S-4: 霰雪惊鸿（散弹）
-local FORM_SHOTGUN = {
-    id = "shotgun",
-    interval = 0.22,        -- 射击间隔
-    speed    = 420,         -- 弹速（正常）
-    perShot  = 5,           -- 分裂弹丸数
-    spread   = math.rad(18),-- ±18°
-    -- 子弹属性
-    pierce      = 1,        -- 每颗穿透 1 个
-    bulletLife   = 0.43,     -- 180px / 420px/s ≈ 0.43s 射程
-    dmgMult     = 0.35,     -- 弹丸伤害 = 主弹 × 0.35
-    bulletRadius = 5,
-    -- 等级加成
-    levelBonus = {
-        [2] = { perShot = 7 },
-        [3] = { perShot = 7, bulletLife = 0.62 },  -- 260px range
-        [4] = { perShot = 7, bulletLife = 0.62, pierce = 2 },
-        [5] = { perShot = 7, bulletLife = 0.62, pierce = 2, closeDmg = 1.5 },
-    },
-}
+    return forms
+end
 
-local FORMS = {
-    [1] = FORM_DEFAULT,
-    [2] = FORM_PIERCE,
-    [3] = FORM_LASER,
-    [4] = FORM_SPLASH,
-    [5] = FORM_SHOTGUN,
-}
+local FORMS = loadForms()
 
 -- ═══ 激光状态 ═══
 local laserState_ = {
@@ -136,7 +81,7 @@ end
 function M.getFormConfig()
     local form = SkillState.getForm("shot")
     local level = SkillState.getLevel("shot")
-    local base = FORMS[form] or FORM_DEFAULT
+    local base = FORMS[form] or FORMS[1]
     if base.id == "default" then return base end
 
     -- 合并等级加成
