@@ -316,6 +316,7 @@ local qteState_ = {
     flashAlpha = 0,
 }
 local wasBTActive_ = false  -- 上一帧子弹时间是否激活
+local wasBTHeld_   = false  -- 上一帧 BT 按键是否按住（用于 QTE 检测 just-pressed）
 
 -- QTE 状态查询（供外部 UI 绘制用）
 function M.getQTEState()
@@ -649,19 +650,45 @@ function M.update(dt, realDt)
     -- pulseHit 存储在模块级变量供 main.lua 碰撞检测读取
     M._lastPulseHit = pulseHit
 
-    -- ——— QTE 全弹爆发系统（BT 结束时自动触发） ———
+    -- ——— QTE 全弹爆发系统（BT 按钮触发） ———
     local InputH = require("game.InputHandler")
     local PlayerMod = require("game.Player")
+    local btHeld = InputH.isBulletTimeHeld()
+    local btJustPressed = btHeld and not wasBTHeld_
+    wasBTHeld_ = btHeld
 
-    -- 检测子弹时间结束瞬间 → 直接触发 QTE 爆发（不再需要手动按键）
+    -- 检测子弹时间结束瞬间 → 开启 QTE 窗口
     if wasBTActive_ and not btActive then
-        -- BT 刚结束，且轨道有子弹时触发爆发
+        -- BT 刚结束，且轨道有子弹时才触发 QTE 窗口
         if #orbitBullets_ > 0 then
-            M._triggerQTEBurst(player)
-            print("[BulletMgr] BT结束 → 自动QTE爆发, 形态=" .. QTEHandler.getFormId() .. " 轨道弹数=" .. #orbitBullets_)
+            -- 自动触发（默认形态 Lv5）：跳过窗口直接爆发
+            if QTEHandler.isAutoTrigger() then
+                M._triggerQTEBurst(player)
+            else
+                qteState_.active = true
+                qteState_.timer  = QTEHandler.getWindow()
+                qteState_.flashAlpha = 0
+                print("[BulletMgr] QTE 窗口开启, 形态=" .. QTEHandler.getFormId() .. " 轨道弹数=" .. #orbitBullets_)
+            end
         end
     end
     wasBTActive_ = btActive
+
+    -- QTE 窗口倒计时（用 BT 按钮触发爆发）
+    if qteState_.active then
+        qteState_.timer = qteState_.timer - realDt
+
+        -- 玩家在窗口内按下 BT 键 → 触发全弹爆发
+        if btJustPressed then
+            M._triggerQTEBurst(player)
+            -- 防止本次BT按键同时重新激活子弹时间
+            local pData = PlayerMod.getData()
+            if pData then pData.energyCooldown = math.max(pData.energyCooldown, 0.15) end
+        elseif qteState_.timer <= 0 then
+            qteState_.active = false
+            print("[BulletMgr] QTE 超时，窗口关闭")
+        end
+    end
 
     -- 执行爆发连射（default / radial 模式使用 burstQueue）
     if qteState_.bursting then
@@ -953,6 +980,27 @@ function M.draw(vg)
             nvgFillColor(vg, nvgRGBAf(0.8, 1.0, 1.0, innerA))
             nvgFill(vg)
         end
+    end
+
+    -- QTE 收缩环（BT 按键窗口视觉提示）
+    if qteState_.active and player then
+        local progress = 1 - (qteState_.timer / QTEHandler.getWindow())  -- 0→1
+        local baseR = player.radius + 30
+        local ringR = baseR * (1 - progress * 0.6)  -- 收缩到 40%
+        local alpha = 0.8 * (1 - progress * 0.4)
+        -- 外环：金色收缩
+        nvgBeginPath(vg)
+        nvgCircle(vg, player.x, player.y, ringR)
+        nvgStrokeColor(vg, nvgRGBAf(1.0, 0.85, 0.2, alpha))
+        nvgStrokeWidth(vg, 3.5 - progress * 1.5)
+        nvgStroke(vg)
+        -- 内环闪烁提示
+        local flash = 0.3 + math.abs(math.sin(progress * math.pi * 4)) * 0.5
+        nvgBeginPath(vg)
+        nvgCircle(vg, player.x, player.y, ringR * 0.7)
+        nvgStrokeColor(vg, nvgRGBAf(1.0, 0.95, 0.5, flash * alpha))
+        nvgStrokeWidth(vg, 1.5)
+        nvgStroke(vg)
     end
 
     -- 方向指示：始终显示小白箭头，自动开火时加虚线+锁定
