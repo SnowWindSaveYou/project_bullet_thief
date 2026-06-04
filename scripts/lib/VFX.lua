@@ -537,17 +537,7 @@ local function drawOnePopup(p)
     nvgScale(vg, curScale, curScale)
     nvgRotate(vg, rotation * math.pi / 180)
 
-    -- 光晕（在文字背后）
-    if alpha > 0.3 then
-        local glowR = 28 + 14 * (curScale / baseScale)
-        local glow = nvgRadialGradient(vg, 0, 0, 0, glowR,
-            nvgRGBA(p.r, p.g, p.b, math.floor(alpha * 90)),
-            nvgRGBA(p.r, p.g, p.b, 0))
-        nvgBeginPath(vg)
-        nvgRect(vg, -glowR, -glowR, glowR*2, glowR*2)
-        nvgFillPaint(vg, glow)
-        nvgFill(vg)
-    end
+
 
     -- pixel 字体，四层渲染
     nvgFontFace(vg, "pixel")

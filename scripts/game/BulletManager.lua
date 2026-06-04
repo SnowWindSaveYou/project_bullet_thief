@@ -649,51 +649,19 @@ function M.update(dt, realDt)
     -- pulseHit 存储在模块级变量供 main.lua 碰撞检测读取
     M._lastPulseHit = pulseHit
 
-    -- ——— QTE 全弹爆发系统 ———
+    -- ——— QTE 全弹爆发系统（BT 结束时自动触发） ———
     local InputH = require("game.InputHandler")
     local PlayerMod = require("game.Player")
-    local fireHeld = InputH.isFireHeld()
-    local justPressed = fireHeld and not wasFireHeld_
-    wasFireHeld_ = fireHeld
 
-    -- 检测子弹时间结束瞬间 → 触发 QTE 窗口
+    -- 检测子弹时间结束瞬间 → 直接触发 QTE 爆发（不再需要手动按键）
     if wasBTActive_ and not btActive then
-        -- BT 刚结束，且轨道有子弹时才触发 QTE
+        -- BT 刚结束，且轨道有子弹时触发爆发
         if #orbitBullets_ > 0 then
-            -- 自动触发（默认形态 Lv5）：跳过窗口直接爆发
-            if QTEHandler.isAutoTrigger() then
-                M._triggerQTEBurst(player)
-            else
-                qteState_.active = true
-                qteState_.timer  = QTEHandler.getWindow()
-                qteState_.flashAlpha = 0
-                qteState_.needRelease = fireHeld
-                print("[BulletMgr] QTE 窗口开启, 形态=" .. QTEHandler.getFormId() .. " 轨道弹数=" .. #orbitBullets_)
-            end
+            M._triggerQTEBurst(player)
+            print("[BulletMgr] BT结束 → 自动QTE爆发, 形态=" .. QTEHandler.getFormId() .. " 轨道弹数=" .. #orbitBullets_)
         end
     end
     wasBTActive_ = btActive
-
-    -- QTE 窗口倒计时
-    if qteState_.active then
-        qteState_.timer = qteState_.timer - realDt
-
-        -- 等待松手后才接受按下
-        if qteState_.needRelease then
-            if not fireHeld then
-                qteState_.needRelease = false
-            end
-        end
-
-        -- 玩家在窗口内按下发射 → 触发全弹爆发
-        local qteAccept = justPressed and not qteState_.needRelease
-        if qteAccept then
-            M._triggerQTEBurst(player)
-        elseif qteState_.timer <= 0 then
-            qteState_.active = false
-            print("[BulletMgr] QTE 超时，窗口关闭")
-        end
-    end
 
     -- 执行爆发连射（default / radial 模式使用 burstQueue）
     if qteState_.bursting then
@@ -763,24 +731,29 @@ function M.update(dt, realDt)
         qteState_.flashAlpha = math.max(0, qteState_.flashAlpha - realDt * 4)
     end
 
-    -- 处理常规发射（QTE 爆发期间禁止；QTE 窗口中若玩家从BT就按住则允许继续攻击）
+    -- 处理常规发射（QTE 爆发期间禁止）
     fireCooldown_ = fireCooldown_ - dt
-    local qteBlocksFire = qteState_.bursting or (qteState_.active and not qteState_.needRelease)
+    local qteBlocksFire = qteState_.bursting
+    -- 自动射击条件判断
+    local isXingye = (PlayerMod.getActiveCharacter() == "xingye")
+    local _, lockedTarget = PlayerMod.getFireDirection()
+    local hasTarget = (lockedTarget ~= nil)
+    local autoFiring = InputH.isAutoFireActive(#orbitBullets_ > 0, hasTarget, btActive, isXingye)
+
     if not qteBlocksFire then
         -- ——— 激光模式特殊处理 ———
         if ShotHandler.isLaserMode() then
             local fireAngle, _ = PlayerMod.getFireDirection()
-            if fireHeld and #orbitBullets_ > 0 then
-                -- 按住 → 蓄力
+            if autoFiring then
+                -- 自动蓄力
                 if not ShotHandler.getLaserState().charging then
                     ShotHandler.laserChargeStart()
                 end
                 ShotHandler.laserChargeUpdate(realDt, #orbitBullets_)
             elseif ShotHandler.getLaserState().charging then
-                -- 松开 → 释放激光
+                -- 条件不满足时释放激光（目标消失或进入BT）
                 local consumed = ShotHandler.laserRelease(fireAngle)
                 if consumed > 0 then
-                    -- 从轨道中移除对应数量子弹
                     for _ = 1, consumed do
                         if #orbitBullets_ > 0 then
                             orbitPool_:release(orbitBullets_[#orbitBullets_])
@@ -795,9 +768,9 @@ function M.update(dt, realDt)
             -- 激光发射中持续更新
             ShotHandler.laserFireUpdate(realDt)
         else
-            -- ——— 常规发射 ———
-            if fireHeld and #orbitBullets_ > 0 then
-                if justPressed or fireCooldown_ <= 0 then
+            -- ——— 常规自动发射 ———
+            if autoFiring then
+                if fireCooldown_ <= 0 then
                     local fireAngle, _ = PlayerMod.getFireDirection()
                     -- BT 期间跳过 btShielded 子弹（保留给 QTE 爆发）
                     M.doFire(player.x, player.y, player.orbitAngle, fireAngle, btActive)
@@ -982,11 +955,12 @@ function M.draw(vg)
         end
     end
 
-    -- 方向指示：始终显示小白箭头，开火时加虚线+锁定
+    -- 方向指示：始终显示小白箭头，自动开火时加虚线+锁定
     local InputH = require("game.InputHandler")
     local PlayerMod = require("game.Player")
     local fa, lockedEnemy = PlayerMod.getFireDirection()
-    local firing = InputH.isFireHeld() and #orbitBullets_ > 0
+    local isXingye = (PlayerMod.getActiveCharacter() == "xingye")
+    local firing = InputH.isAutoFireActive(#orbitBullets_ > 0, lockedEnemy ~= nil, player.bulletTimeActive or false, isXingye)
 
     -- 常驻小箭头（圆角 chevron）
     local arrowDist = player.radius + 20
@@ -1036,46 +1010,6 @@ function M.draw(vg)
         end
     end
 
-    -- QTE 窗口提示：音游风格缩圈（圆环从大向小收缩）
-    if qteState_.active then
-        local progress = 1.0 - (qteState_.timer / QTEHandler.getWindow())  -- 0→1
-        -- 缩圈：从大半径收缩到玩家半径
-        local maxR = player.radius + 80
-        local minR = player.radius + 4
-        local ringR = maxR - (maxR - minR) * progress
-
-        -- 圆环透明度：淡入后保持，最后 0.3 秒加速闪烁
-        local ringAlpha
-        if progress < 0.1 then
-            ringAlpha = progress / 0.1  -- 淡入
-        elseif qteState_.timer < 0.4 then
-            -- 快到时间了，闪烁催促
-            ringAlpha = 0.5 + 0.5 * math.abs(math.sin(qteState_.timer * 16))
-        else
-            ringAlpha = 0.9
-        end
-
-        -- 外圈缩小（主要视觉）
-        nvgBeginPath(vg)
-        nvgCircle(vg, player.x, player.y, ringR)
-        nvgStrokeColor(vg, nvgRGBAf(1.0, 0.95, 0.3, ringAlpha))
-        nvgStrokeWidth(vg, 3.5)
-        nvgStroke(vg)
-
-        -- 内圈目标位置（固定小圈，作为缩圈目标参照）
-        nvgBeginPath(vg)
-        nvgCircle(vg, player.x, player.y, minR)
-        nvgStrokeColor(vg, nvgRGBAf(1.0, 1.0, 1.0, 0.35))
-        nvgStrokeWidth(vg, 1.5)
-        nvgStroke(vg)
-
-        -- "FIRE!" 文字（随缩圈节奏呼吸）
-        nvgFontFace(vg, "sans")
-        nvgFontSize(vg, 16 + progress * 4)
-        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFillColor(vg, nvgRGBAf(1.0, 0.95, 0.3, ringAlpha))
-        nvgText(vg, player.x, player.y - player.radius - 28, "FIRE!")
-    end
 end
 
 -- QTE 闪白全屏覆盖（在 main.lua 渲染最后调用）

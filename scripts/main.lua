@@ -22,11 +22,13 @@ local Upgrade      = require "game.UpgradeSystem"
 local PagePreLevel = require "ui.PagePreLevel"
 local PageBestiary = require "ui.PageBestiary"
 local PagePractice = require "ui.PagePractice"
-local DebugPanel   = require "ui.DebugPanel"
-local DebugSkillPanel = require "ui.DebugSkillPanel"
-local SkillState   = require "game.SkillState"
-local MineSystem   = require "game.skills.MineSystem"
-local LinkSystem   = require "game.skills.LinkSystem"
+local DebugPanel       = require "ui.DebugPanel"
+local DebugSkillPanel  = require "ui.DebugSkillPanel"
+local DebugChenxiPanel = require "ui.DebugChenxiPanel"
+local SkillState       = require "game.SkillState"
+local MineSystem       = require "game.skills.MineSystem"
+local LinkSystem       = require "game.skills.LinkSystem"
+local ChenxiCtrl       = require "game.characters.ChenxiController"
 
 -- ============================================================================
 -- 全局上下文
@@ -93,6 +95,18 @@ function Start()
     MineSystem.init()
     LinkSystem.init()
     DebugSkillPanel.init(W, H)
+    ChenxiCtrl.init()
+    DebugChenxiPanel.init(W, H)
+
+    -- 接线：ChenxiCtrl 消耗轨道弹的回调
+    ChenxiCtrl.consumeOrbitCallback = function()
+        local orbitBullets = BulletMgr.getOrbitBullets()
+        if #orbitBullets > 0 then
+            BulletMgr.removeOrbitBullet(#orbitBullets)  -- 移除最后一颗
+            return true
+        end
+        return false
+    end
 
     VFX.setContext(vg, W, H, 0)
 
@@ -255,49 +269,65 @@ function checkCollisions(dt)
             -- B线效果：BT中范围内子弹减速(B2+)和偏转(B3)
             -- 注意：偷取判定必须在擦弹之前，避免同一帧同时弹出 +EN 和 STEAL
             if player.bulletTimeActive then
-                local stealDist = player.stealRadius + (b.radius or 6)
-                if dist < stealDist then
-                    -- B2+: 范围内子弹减速（通过缩放 vx/vy）
-                    local bLv = SkillState.getLevel("steal")
-                    if bLv >= 2 then
-                        if not b.baseVx then
-                            b.baseVx = b.vx
-                            b.baseVy = b.vy
-                        end
-                        b.vx = b.baseVx * 0.85
-                        b.vy = b.baseVy * 0.85
-                    end
-                    -- B3: 范围内子弹向主角偏转 5°/帧
-                    if bLv >= 3 and b.angle then
-                        local targetAngle = math.atan(player.y - b.y, player.x - b.x)
-                        local diff = targetAngle - b.angle
-                        -- 归一化到 [-π, π]
-                        while diff > math.pi do diff = diff - 2 * math.pi end
-                        while diff < -math.pi do diff = diff + 2 * math.pi end
-                        local deflect = math.rad(5)
-                        if math.abs(diff) < deflect then
-                            b.angle = targetAngle
-                        elseif diff > 0 then
-                            b.angle = b.angle + deflect
-                        else
-                            b.angle = b.angle - deflect
-                        end
+                local activeChr = Player.getActiveCharacter()
+
+                -- ═══ 晨曦BT：清弹回能（不偷取） ═══
+                if activeChr == "chenxi" then
+                    local clearDist = 40 + (b.radius or 6)  -- 晨曦BT清弹范围
+                    if dist < clearDist then
+                        b.dead = true
+                        ChenxiCtrl.onClearBullet()
+                        VFX.spawnHit(b.x, b.y, 255, 180, 50)
+                        VFX.spawnPopup("CLEAR", b.x, b.y, 255, 200, 80, 0.45)
+                        goto continue_bullet
                     end
 
-                    -- BT偷取判定（扩大范围）
-                    local stolenX, stolenY = b.x, b.y
-                    BulletMgr.stealBullet(i)
-                    Player.onSteal()
-                    VFX.spawnPopup("STEAL", stolenX, stolenY, 80, 255, 200, 0.55)
-                    -- C/D线：在被夺子弹原位触发
-                    if MineSystem.isActive() then MineSystem.onBulletStolen(stolenX, stolenY) end
-                    if LinkSystem.isActive() then LinkSystem.onBulletStolen(stolenX, stolenY) end
-                    goto continue_bullet
+                -- ═══ 星夜BT：偷取子弹（原逻辑） ═══
+                else
+                    local stealDist = player.stealRadius + (b.radius or 6)
+                    if dist < stealDist then
+                        -- B2+: 范围内子弹减速（通过缩放 vx/vy）
+                        local bLv = SkillState.getLevel("steal")
+                        if bLv >= 2 then
+                            if not b.baseVx then
+                                b.baseVx = b.vx
+                                b.baseVy = b.vy
+                            end
+                            b.vx = b.baseVx * 0.85
+                            b.vy = b.baseVy * 0.85
+                        end
+                        -- B3: 范围内子弹向主角偏转 5°/帧
+                        if bLv >= 3 and b.angle then
+                            local targetAngle = math.atan(player.y - b.y, player.x - b.x)
+                            local diff = targetAngle - b.angle
+                            -- 归一化到 [-π, π]
+                            while diff > math.pi do diff = diff - 2 * math.pi end
+                            while diff < -math.pi do diff = diff + 2 * math.pi end
+                            local deflect = math.rad(5)
+                            if math.abs(diff) < deflect then
+                                b.angle = targetAngle
+                            elseif diff > 0 then
+                                b.angle = b.angle + deflect
+                            else
+                                b.angle = b.angle - deflect
+                            end
+                        end
+
+                        -- BT偷取判定（扩大范围）
+                        local stolenX, stolenY = b.x, b.y
+                        BulletMgr.stealBullet(i)
+                        Player.onSteal()
+                        VFX.spawnPopup("STEAL", stolenX, stolenY, 80, 255, 200, 0.55)
+                        -- C/D线：在被夺子弹原位触发
+                        if MineSystem.isActive() then MineSystem.onBulletStolen(stolenX, stolenY) end
+                        if LinkSystem.isActive() then LinkSystem.onBulletStolen(stolenX, stolenY) end
+                        goto continue_bullet
+                    end
                 end
             end
 
-            -- 擦弹（BT期间不触发，专注夺取）
-            if not player.bulletTimeActive then
+            -- 擦弹（BT期间不触发；晨曦激活时不触发——设计文档：擦弹回复=无）
+            if not player.bulletTimeActive and Player.getActiveCharacter() == "xingye" then
                 if dist < player.grazeRadius and not b.grazed then
                     b.grazed = true
                     local grazeFactor = 1.0 - (dist / player.grazeRadius)
@@ -310,14 +340,23 @@ function checkCollisions(dt)
             -- 命中判定（物理碰撞半径，不受B线影响）
             if dist < (player.radius + b.radius) then
                 if player.bulletTimeActive then
-                    -- 近距离偷取（无论B线等级）
-                    local stolenX2, stolenY2 = b.x, b.y
-                    BulletMgr.stealBullet(i)
-                    Player.onSteal()
-                    VFX.spawnPopup("STEAL", stolenX2, stolenY2, 80, 255, 200, 0.55)
-                    -- C/D线：在被夺子弹原位触发
-                    if MineSystem.isActive() then MineSystem.onBulletStolen(stolenX2, stolenY2) end
-                    if LinkSystem.isActive() then LinkSystem.onBulletStolen(stolenX2, stolenY2) end
+                    local activeChr2 = Player.getActiveCharacter()
+                    if activeChr2 == "chenxi" then
+                        -- 晨曦近距离清弹
+                        b.dead = true
+                        ChenxiCtrl.onClearBullet()
+                        VFX.spawnHit(b.x, b.y, 255, 180, 50)
+                        VFX.spawnPopup("CLEAR", b.x, b.y, 255, 200, 80, 0.45)
+                    else
+                        -- 星夜近距离偷取（无论B线等级）
+                        local stolenX2, stolenY2 = b.x, b.y
+                        BulletMgr.stealBullet(i)
+                        Player.onSteal()
+                        VFX.spawnPopup("STEAL", stolenX2, stolenY2, 80, 255, 200, 0.55)
+                        -- C/D线：在被夺子弹原位触发
+                        if MineSystem.isActive() then MineSystem.onBulletStolen(stolenX2, stolenY2) end
+                        if LinkSystem.isActive() then LinkSystem.onBulletStolen(stolenX2, stolenY2) end
+                    end
                 else
                     b.dead = true
                     Player.takeDamage(b.damage or 1)
@@ -778,7 +817,172 @@ function checkCollisions(dt)
         VFX.triggerShake(3, 0.1)
     end
 
-    -- 2j. C线 梦境诡雷更新与伤害处理
+    -- 2j-cx. 晨曦斩击 vs 敌人（近身自动斩击，范围/击退由配置驱动）
+    if Player.getActiveCharacter() == "chenxi" then
+        local slashRange = ChenxiCtrl.getSlashRange()
+        -- BT内灼痕路径记录（S-3形态）
+        if player.bulletTimeActive then
+            ChenxiCtrl.recordBurnPoint(player.x, player.y)
+        end
+        -- 对敌人斩击
+        for ei = #enemies, 1, -1 do
+            local e = enemies[ei]
+            if not e.dead then
+                local sdx = player.x - e.x
+                local sdy = player.y - e.y
+                local sDist = math.sqrt(sdx * sdx + sdy * sdy)
+                if sDist < (slashRange + e.radius) then
+                    local slashDmg = ChenxiCtrl.trySlash(e, player)
+                    if slashDmg > 0 then
+                        EnemyMgr.damageEnemy(ei, slashDmg, true)
+                        VFX.spawnHit(e.x, e.y, 255, 180, 50)
+                        VFX.spawnPopup(tostring(math.floor(slashDmg)), e.x, e.y - 20, 255, 180, 50)
+                        VFX.triggerShake(3, 0.1)
+                        -- 击退（sdx指向玩家方向，取反使敌人远离玩家）
+                        if sDist > 0 then
+                            local knockStr = ChenxiCtrl.getKnockback()
+                            e.x = e.x - (sdx / sDist) * knockStr
+                            e.y = e.y - (sdy / sDist) * knockStr
+                        end
+                    end
+                end
+            end
+        end
+        -- 对 Boss 斩击
+        if BossMgr.isActive() then
+            local bossData = BossMgr.getBoss()
+            if bossData and not bossData.dead then
+                local bdx = player.x - bossData.x
+                local bdy = player.y - bossData.y
+                local bDist = math.sqrt(bdx * bdx + bdy * bdy)
+                if bDist < (slashRange + bossData.radius) then
+                    local slashDmg = ChenxiCtrl.trySlash(bossData, player)
+                    if slashDmg > 0 then
+                        BossMgr.damageBoss(slashDmg)
+                        VFX.spawnHit(bossData.x, bossData.y, 255, 180, 50)
+                        VFX.spawnPopup(tostring(math.floor(slashDmg)), bossData.x, bossData.y - 24, 255, 180, 50)
+                        VFX.triggerShake(4, 0.15)
+                    end
+                end
+            end
+        end
+        -- 收尾攻击处理（BT结束后自动触发，根据形态分别处理）
+        local finisher = ChenxiCtrl.popFinisher()
+        if finisher then
+            local BODY_UNIT = player.radius * 2  -- 1"身位"≈角色直径
+            local baseDmg = ChenxiCtrl.getBaseDamage()
+            local count = finisher.slashCount
+            local formId = finisher.formId
+            local fCfg = ChenxiCtrl.getFinisherConfig(formId)
+
+            VFX.triggerShake(10, 0.3)
+            VFX.spawnBanner("FINISHER x" .. count, 255, 180, 50)
+
+            if formId == "verdict" or not fCfg then
+                -- F-1 裁决：以自身为圆心的范围爆炸
+                local cfg = fCfg or { baseRadius = 1.5, radiusPerCount = 0.05, dmgPerCount = 0.06 }
+                local finRadius = (cfg.baseRadius + count * cfg.radiusPerCount) * BODY_UNIT
+                local finDmg = math.max(1, baseDmg * (1 + count * cfg.dmgPerCount))
+                VFX.spawnAOE(player.x, player.y, finRadius, math.floor(finDmg))
+                -- 对范围内敌人造成伤害
+                for ei = #enemies, 1, -1 do
+                    local e = enemies[ei]
+                    if not e.dead then
+                        local fdx = e.x - player.x
+                        local fdy = e.y - player.y
+                        if fdx * fdx + fdy * fdy < finRadius * finRadius then
+                            EnemyMgr.damageEnemy(ei, finDmg, true)
+                        end
+                    end
+                end
+                if BossMgr.isActive() then
+                    local bd = BossMgr.getBoss()
+                    if bd and not bd.dead then
+                        local fdx = bd.x - player.x
+                        local fdy = bd.y - player.y
+                        if fdx * fdx + fdy * fdy < finRadius * finRadius then
+                            BossMgr.damageBoss(finDmg)
+                        end
+                    end
+                end
+
+            elseif formId == "thousand" then
+                -- F-2 千刃：回旋刀追踪，数量=斩击计数，伤害=baseDmg×dmgPerBlade
+                local dmgPerBlade = baseDmg * (fCfg.dmgPerBlade or 0.4)
+                -- 收集存活目标
+                local targets = {}
+                for ei = #enemies, 1, -1 do
+                    local e = enemies[ei]
+                    if not e.dead then
+                        targets[#targets + 1] = { type = "enemy", idx = ei, ref = e }
+                    end
+                end
+                if BossMgr.isActive() then
+                    local bd = BossMgr.getBoss()
+                    if bd and not bd.dead then
+                        targets[#targets + 1] = { type = "boss", ref = bd }
+                    end
+                end
+                -- 分配回旋刀到存活目标（均匀分配）
+                if #targets > 0 then
+                    for i = 1, count do
+                        local ti = ((i - 1) % #targets) + 1
+                        local t = targets[ti]
+                        -- 递增伤害（Lv2+）
+                        local stackBonus = fCfg.levelBonus and fCfg.levelBonus["2"] and fCfg.levelBonus["2"].stackBonus or 0
+                        local hitCount = math.ceil(i / #targets)
+                        local bladeDmg = dmgPerBlade * (1 + stackBonus * (hitCount - 1))
+                        if t.type == "enemy" then
+                            EnemyMgr.damageEnemy(t.idx, bladeDmg, true)
+                            VFX.spawnHit(t.ref.x, t.ref.y, 255, 200, 50)
+                        else
+                            BossMgr.damageBoss(bladeDmg)
+                            VFX.spawnHit(t.ref.x, t.ref.y, 255, 200, 50)
+                        end
+                    end
+                    -- 显示总伤害数字
+                    local totalDmg = math.floor(dmgPerBlade * count)
+                    VFX.spawnPopup(tostring(totalDmg), player.x, player.y - 30, 255, 180, 50)
+                end
+
+            elseif formId == "flash" then
+                -- F-3 一闪：前方穿透冲击波
+                local waveWidth = (fCfg.baseWidth + count * fCfg.widthPerCount) * BODY_UNIT
+                local waveRange = (fCfg.baseRange + count * fCfg.rangePerCount) * BODY_UNIT
+                local waveDmg = math.max(1, baseDmg * (1 + count * fCfg.dmgPerCount))
+                -- 取玩家朝向（用最近移动方向角度）
+                local angle = player.lastMoveAngle or 0
+                local dirX = math.cos(angle)
+                local dirY = math.sin(angle)
+                -- 检测冲击波矩形内的敌人（用点积判定）
+                local function inWave(ex, ey)
+                    local relX = ex - player.x
+                    local relY = ey - player.y
+                    local along = relX * dirX + relY * dirY  -- 沿方向投影
+                    if along < 0 or along > waveRange then return false end
+                    local perp = math.abs(relX * (-dirY) + relY * dirX)  -- 垂直距离
+                    return perp < waveWidth * 0.5
+                end
+                for ei = #enemies, 1, -1 do
+                    local e = enemies[ei]
+                    if not e.dead and inWave(e.x, e.y) then
+                        EnemyMgr.damageEnemy(ei, waveDmg, true)
+                        VFX.spawnHit(e.x, e.y, 255, 220, 80)
+                    end
+                end
+                if BossMgr.isActive() then
+                    local bd = BossMgr.getBoss()
+                    if bd and not bd.dead and inWave(bd.x, bd.y) then
+                        BossMgr.damageBoss(waveDmg)
+                        VFX.spawnHit(bd.x, bd.y, 255, 220, 80)
+                    end
+                end
+                VFX.spawnPopup(tostring(math.floor(waveDmg)), player.x + dirX * 40, player.y + dirY * 40, 255, 220, 80)
+            end
+        end
+    end
+
+    -- 2k. C线 梦境诡雷更新与伤害处理
     if MineSystem.isActive() then
         local bossRef = BossMgr.isActive() and BossMgr.getBoss() or nil
         local mineHits = MineSystem.update(dt, player.x, player.y, enemies, bossRef)
@@ -907,6 +1111,7 @@ local function startGame()
     SkillState.reset()
     MineSystem.reset()
     LinkSystem.reset()
+    ChenxiCtrl.reset()
     Upgrade.reset()
     VFX.resetAll()
     UI.hideMenu()
@@ -928,6 +1133,7 @@ local function startPractice()
     SkillState.reset()
     MineSystem.reset()
     LinkSystem.reset()
+    ChenxiCtrl.reset()
     VFX.resetAll()
     UI.hideMenu()
     PagePractice.show()
@@ -1066,6 +1272,7 @@ function HandleRender(eventType, eventData)
     -- Debug 面板始终在最上层
     DebugPanel.draw(vg, W, H)
     DebugSkillPanel.draw(vg, W, H)
+    DebugChenxiPanel.draw(vg, W, H)
 
     -- CRT 扫线叠加（Balatro 风格，最顶层覆盖）
     Renderer.drawScanlines(3, 0.12)
@@ -1094,6 +1301,12 @@ function HandleKeyDown(eventType, eventData)
         return
     end
 
+    -- Debug 晨曦面板切换（KEY_8 = 数字8）
+    if key == KEY_8 then
+        DebugChenxiPanel.toggle()
+        return
+    end
+
     -- Debug 面板打开时拦截其他按键
     if DebugPanel.isVisible() then
         if key == KEY_ESCAPE then
@@ -1106,6 +1319,14 @@ function HandleKeyDown(eventType, eventData)
     if DebugSkillPanel.isVisible() then
         if key == KEY_ESCAPE then
             DebugSkillPanel.hide()
+        end
+        return
+    end
+
+    -- Debug 晨曦面板打开时拦截其他按键
+    if DebugChenxiPanel.isVisible() then
+        if key == KEY_ESCAPE then
+            DebugChenxiPanel.hide()
         end
         return
     end
@@ -1158,6 +1379,12 @@ function HandleMouseDown(eventType, eventData)
     local x   = eventData["X"]:GetInt() / dpr
     local y   = eventData["Y"]:GetInt() / dpr
     Input.onMouseDown(btn, x, y)
+
+    -- Debug 晨曦面板优先处理
+    if DebugChenxiPanel.isVisible() then
+        DebugChenxiPanel.onClick(x, y)
+        return
+    end
 
     -- Debug 技能面板优先处理
     if DebugSkillPanel.isVisible() then
@@ -1256,6 +1483,12 @@ function HandleTouchBegin(eventType, eventData)
     local x = eventData["X"]:GetInt() / dpr
     local y = eventData["Y"]:GetInt() / dpr
     Input.onTouchBegin(touchId, x, y)
+
+    -- Debug 晨曦面板优先
+    if DebugChenxiPanel.isVisible() then
+        DebugChenxiPanel.onClick(x, y)
+        return
+    end
 
     -- Debug 技能面板优先
     if DebugSkillPanel.isVisible() then

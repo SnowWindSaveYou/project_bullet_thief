@@ -6,10 +6,20 @@ local Renderer     = require "game.Renderer"
 local Input        = require "game.InputHandler"
 local Tween        = require "lib.Tween"
 local Xingye       = require "game.characters.Xingye"
+local Chenxi       = require "game.characters.Chenxi"
+local ChenxiCtrl   = require "game.characters.ChenxiController"
 local SkillState   = require "game.SkillState"
 local ConfigLoader = require "config.ConfigLoader"
 
 local M = {}
+
+-- ——— 角色切换系统 ———
+local CHARACTER_XINGYE = "xingye"
+local CHARACTER_CHENXI = "chenxi"
+local activeCharacter_ = CHARACTER_XINGYE
+local chenxiUnlocked_  = true  -- 默认解锁（调试用）
+local switchAnim_ = { active = false, timer = 0, from = "", to = "" }
+local SWITCH_ANIM_DURATION = 0.3
 
 -- 地图边距（与 Renderer.drawMapBoundary 一致）
 local MAP_MARGIN = 28
@@ -106,15 +116,31 @@ function M.getCFG()
 end
 
 function M.update(dt)
-    -- 0. B线偷取范围更新
-    local bLevel = SkillState.getLevel("steal")
-    if bLevel > 0 and CFG.stealRadiusByLevel[bLevel] then
-        data.stealRadius = CFG.stealRadiusByLevel[bLevel]
-    else
-        data.stealRadius = CFG.stealRadiusBase
+    -- 0. 角色切换动画更新
+    if switchAnim_.active then
+        switchAnim_.timer = switchAnim_.timer + dt
+        if switchAnim_.timer >= SWITCH_ANIM_DURATION then
+            switchAnim_.active = false
+            switchAnim_.timer = 0
+        end
     end
 
-    -- 1. 移动（发射时不再强制停步）
+    -- 0.5. 角色切换输入检测（Tab键）
+    if Input.isSwitchPressed and Input.isSwitchPressed() then
+        M.switchCharacter()
+    end
+
+    -- 1. B线偷取范围更新（仅星夜有效）
+    if activeCharacter_ == CHARACTER_XINGYE then
+        local bLevel = SkillState.getLevel("steal")
+        if bLevel > 0 and CFG.stealRadiusByLevel[bLevel] then
+            data.stealRadius = CFG.stealRadiusByLevel[bLevel]
+        else
+            data.stealRadius = CFG.stealRadiusBase
+        end
+    end
+
+    -- 2. 移动（发射时不再强制停步）
     -- 鼠标/触摸：拖拽多少像素就移动多少像素（1:1，方便擦弹精确控制）
     local mdx, mdy = Input.dragDelta()
     data.x = data.x + mdx
@@ -132,51 +158,58 @@ function M.update(dt)
         data.lastMoveAngle = math.atan(totalDy, totalDx)
     end
 
-    -- 2. 边界限制
+    -- 3. 边界限制
     local margin = MAP_MARGIN + data.radius
     data.x = math.max(margin, math.min(W_ - margin, data.x))
     data.y = math.max(margin, math.min(H_ - margin, data.y))
 
-    -- 3. 能量系统
-    local enCFG = CFG.energy
-    -- 动态能量上限 = 基础上限 × 成长倍率
-    local energyMax = enCFG.max * (data.energyMaxMult or 1)
-    if data.bulletTimeActive then
-        data.energy = data.energy - enCFG.btCostRate * (data.energyCostMult or 1) * dt
-        if data.energy <= 0 then
-            data.energy = 0
-            data.bulletTimeActive = false
-            data.energyCooldown   = enCFG.cooldown
-            fireBTEnd()
-            print("[Player] 子弹时间: 能量耗尽，进入冷却")
+    -- 4. 能量系统（分角色处理）
+    if activeCharacter_ == CHARACTER_XINGYE then
+        -- 星夜：标准BT能量
+        local enCFG = CFG.energy
+        local energyMax = enCFG.max * (data.energyMaxMult or 1)
+        if data.bulletTimeActive then
+            data.energy = data.energy - enCFG.btCostRate * (data.energyCostMult or 1) * dt
+            if data.energy <= 0 then
+                data.energy = 0
+                data.bulletTimeActive = false
+                data.energyCooldown   = enCFG.cooldown
+                fireBTEnd()
+                print("[Player] 子弹时间: 能量耗尽，进入冷却")
+            end
+        else
+            -- 自然恢复
+            if data.energyCooldown > 0 then
+                data.energyCooldown = data.energyCooldown - dt
+            else
+                data.energy = math.min(energyMax,
+                    data.energy + enCFG.regenRate * (data.energyRegenMult or 1) * dt)
+            end
+            -- 检测开启子弹时间
+            if Input.isBulletTimeHeld()
+                and data.energy >= enCFG.minToStart
+                and data.energyCooldown <= 0 then
+                data.bulletTimeActive = true
+                print("[Player] 子弹时间: 开启")
+            end
         end
     else
-        -- 自然恢复
-        if data.energyCooldown > 0 then
-            data.energyCooldown = data.energyCooldown - dt
-        else
-            data.energy = math.min(energyMax,
-                data.energy + enCFG.regenRate * (data.energyRegenMult or 1) * dt)
-        end
-        -- 检测开启子弹时间
-        if Input.isBulletTimeHeld()
-            and data.energy >= enCFG.minToStart
-            and data.energyCooldown <= 0 then
-            data.bulletTimeActive = true
-            print("[Player] 子弹时间: 开启")
-        end
+        -- 晨曦：ChenxiCtrl 管理能量和BT
+        ChenxiCtrl.update(dt, data)
+        -- 同步BT状态到 data（供外部读取）
+        data.bulletTimeActive = ChenxiCtrl.isBTActive()
     end
 
-    -- 4. 轨道角度旋转
+    -- 5. 轨道角度旋转
     data.orbitAngle = data.orbitAngle
         + CFG.orbitAngularSpeed * dt
 
-    -- 5. 视觉动画衰减
+    -- 6. 视觉动画衰减
     data.hitFlash = math.max(0, data.hitFlash - dt * 3.0)
     data.btPulse  = data.btPulse + dt * 3.0
     data.age      = data.age + dt
 
-    -- 6. 伪3D朝向 & 偏转
+    -- 7. 伪3D朝向 & 偏转
     if totalDx > 0.5 then
         if data.dir ~= 1 then
             data.face_yaw = 0  -- 方向切换时重置偏转，避免镜像跳变
@@ -306,36 +339,131 @@ function M.getKillCount()
     return data.killCount
 end
 
+-- ——— 角色切换系统 API ———
+
+--- 获取当前激活角色
+---@return string "xingye"|"chenxi"
+function M.getActiveCharacter()
+    return activeCharacter_
+end
+
+--- 晨曦是否已解锁
+function M.isChenxiUnlocked()
+    return chenxiUnlocked_
+end
+
+--- 解锁晨曦（局内触发，如达成某条件后）
+function M.unlockChenxi()
+    if not chenxiUnlocked_ then
+        chenxiUnlocked_ = true
+        print("[Player] 晨曦已解锁！按 Tab 切换角色")
+    end
+end
+
+--- 切换角色
+function M.switchCharacter()
+    if not chenxiUnlocked_ then return end
+    if switchAnim_.active then return end  -- 切换动画播放中不可再切
+
+    local from = activeCharacter_
+    local to
+    if activeCharacter_ == CHARACTER_XINGYE then
+        to = CHARACTER_CHENXI
+        -- 切入晨曦时通知控制器
+        ChenxiCtrl.onSwitchIn()
+    else
+        to = CHARACTER_XINGYE
+        -- 切出晨曦时通知控制器
+        ChenxiCtrl.onSwitchOut()
+    end
+
+    activeCharacter_ = to
+    switchAnim_.active = true
+    switchAnim_.timer = 0
+    switchAnim_.from = from
+    switchAnim_.to = to
+    print("[Player] 角色切换:", from, "→", to)
+end
+
+--- 获取晨曦控制器引用（供 main.lua 交互用）
+function M.getChenxiCtrl()
+    return ChenxiCtrl
+end
+
+--- 获取切换动画状态（供绘制用）
+function M.getSwitchAnim()
+    return switchAnim_
+end
+
 
 
 function M.draw(vg)
     local p = data
 
-    -- 子弹时间光晕
+    -- 切换闪烁动画
+    if switchAnim_.active then
+        local t = switchAnim_.timer / SWITCH_ANIM_DURATION
+        -- 闪白效果
+        local flashAlpha = 0
+        if t < 0.3 then
+            flashAlpha = t / 0.3  -- 淡入
+        elseif t < 0.7 then
+            flashAlpha = 1.0      -- 持续
+        else
+            flashAlpha = 1.0 - (t - 0.7) / 0.3  -- 淡出
+        end
+        nvgBeginPath(vg)
+        nvgCircle(vg, p.x, p.y, p.radius + 6)
+        nvgFillColor(vg, nvgRGBAf(1, 1, 1, flashAlpha * 0.6))
+        nvgFill(vg)
+    end
+
+    -- 子弹时间光晕（颜色分角色）
     if p.bulletTimeActive then
         local pulse = math.abs(math.sin(p.btPulse))
         local glowR = p.radius + 10 + pulse * 8
+        local gr, gg, gb  -- 光晕颜色
+        if activeCharacter_ == CHARACTER_CHENXI then
+            gr, gg, gb = 1.0, 0.75, 0.2  -- 金色
+        else
+            gr, gg, gb = 0.3, 0.9, 1.0   -- 青色
+        end
         nvgBeginPath(vg)
         nvgCircle(vg, p.x, p.y, glowR)
-        nvgFillColor(vg, nvgRGBAf(0.3, 0.9, 1.0, 0.15 + pulse * 0.1))
+        nvgFillColor(vg, nvgRGBAf(gr, gg, gb, 0.15 + pulse * 0.1))
         nvgFill(vg)
         nvgBeginPath(vg)
         nvgCircle(vg, p.x, p.y, glowR)
-        nvgStrokeColor(vg, nvgRGBAf(0.3, 0.9, 1.0, 0.5 + pulse * 0.3))
+        nvgStrokeColor(vg, nvgRGBAf(gr, gg, gb, 0.5 + pulse * 0.3))
         nvgStrokeWidth(vg, 1.5)
         nvgStroke(vg)
     end
 
-    -- 绘制角色「星夜」
-    Xingye.draw(vg, p.x, p.y, p.radius, p.hitFlash, p.age, p.dir, p.face_yaw)
+    -- 绘制角色（根据当前激活角色）
+    if activeCharacter_ == CHARACTER_CHENXI then
+        Chenxi.draw(vg, p.x, p.y, p.radius, p.hitFlash, p.age, p.dir, p.face_yaw)
+    else
+        Xingye.draw(vg, p.x, p.y, p.radius, p.hitFlash, p.age, p.dir, p.face_yaw)
+    end
 
-    -- 能量环（外圈弧线）
-    local enMax = CFG.energy.max * (p.energyMaxMult or 1)
-    drawEnergyRing(vg, p.x, p.y, p.radius + 8, p.energy, enMax,
-        p.bulletTimeActive, p.energyCooldown)
+    -- 能量环（颜色分角色）
+    if activeCharacter_ == CHARACTER_CHENXI then
+        -- 晨曦能量环：金色系
+        local cxEnergy = ChenxiCtrl.getEnergy()
+        local cxMax    = ChenxiCtrl.getEnergyMax()
+        drawChenxiEnergyRing(vg, p.x, p.y, p.radius + 8, cxEnergy, cxMax,
+            ChenxiCtrl.isBTActive())
+    else
+        -- 星夜能量环：青色系
+        local enMax = CFG.energy.max * (p.energyMaxMult or 1)
+        drawEnergyRing(vg, p.x, p.y, p.radius + 8, p.energy, enMax,
+            p.bulletTimeActive, p.energyCooldown)
+    end
 
-    -- 自动锁定范围（白色虚线圆环）
-    drawLockRangeCircle(vg, p.x, p.y, LOCK_RADIUS)
+    -- 自动锁定范围（白色虚线圆环，仅星夜射击模式显示）
+    if activeCharacter_ == CHARACTER_XINGYE then
+        drawLockRangeCircle(vg, p.x, p.y, LOCK_RADIUS)
+    end
 end
 
 -- 绘制正六边形（带描边）
@@ -412,6 +540,65 @@ function drawEnergyRing(vg, cx, cy, r, energy, energyMax, btActive, cooldown)
         nvgStrokeColor(vg, nvgRGBAf(0.7, 0.3, 1.0, pa))
         nvgStrokeWidth(vg, 3.5)
         nvgLineCap(vg, NVG_ROUND)
+        nvgStroke(vg)
+    end
+end
+
+-- 绘制晨曦能量环（三段式金色系）
+function drawChenxiEnergyRing(vg, cx, cy, r, energy, energyMax, btActive)
+    local ratio = energy / energyMax
+    local fullArc = math.pi * 2
+
+    -- 背景环（暗灰满圈）
+    nvgBeginPath(vg)
+    nvgArc(vg, cx, cy, r, -math.pi * 0.5, math.pi * 1.5, NVG_CW)
+    nvgStrokeColor(vg, nvgRGBAf(0.2, 0.2, 0.3, 0.5))
+    nvgStrokeWidth(vg, 3.5)
+    nvgStroke(vg)
+
+    if ratio < 0.01 then return end
+
+    -- 获取能量段
+    local segName = ChenxiCtrl.getEnergySegment()
+
+    -- 颜色根据段位变化
+    local er, eg, eb, ea
+    if btActive then
+        -- BT激活：明亮金色
+        er, eg, eb, ea = 1.0, 0.85, 0.3, 1.0
+    elseif segName == "full" then
+        -- 满能量段：亮金
+        er, eg, eb, ea = 1.0, 0.75, 0.2, 0.95
+    elseif segName == "normal" then
+        -- 标准段：琥珀
+        er, eg, eb, ea = 0.9, 0.6, 0.15, 0.85
+    else
+        -- 衰减段：暗橙
+        er, eg, eb, ea = 0.7, 0.4, 0.1, 0.7
+    end
+
+    -- 绘制能量弧
+    local arc = ratio * fullArc
+    nvgBeginPath(vg)
+    nvgArc(vg, cx, cy, r, -math.pi * 0.5, -math.pi * 0.5 + arc, NVG_CW)
+    nvgStrokeColor(vg, nvgRGBAf(er, eg, eb, ea))
+    nvgStrokeWidth(vg, 3.5)
+    nvgLineCap(vg, NVG_ROUND)
+    nvgStroke(vg)
+
+    -- 段位分界线标记（30%和60%处的刻度）
+    local thresholds = { 0.3, 0.6 }
+    for _, th in ipairs(thresholds) do
+        local a = -math.pi * 0.5 + th * fullArc
+        local ix = cx + math.cos(a) * (r - 4)
+        local iy = cy + math.sin(a) * (r - 4)
+        local ox = cx + math.cos(a) * (r + 4)
+        local oy = cy + math.sin(a) * (r + 4)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, ix, iy)
+        nvgLineTo(vg, ox, oy)
+        nvgStrokeColor(vg, nvgRGBAf(1, 1, 1, 0.4))
+        nvgStrokeWidth(vg, 1.5)
         nvgStroke(vg)
     end
 end
