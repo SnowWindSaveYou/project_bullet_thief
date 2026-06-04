@@ -514,6 +514,28 @@ function drawButtons(p)
     -- FIRE 按钮已移除（自动射击）
     local BulletMgr = require("game.BulletManager")
 
+    -- QTE 收缩环（BT 按钮上的倒计时视觉提示）
+    local qteS = BulletMgr.getQTEState()
+    if qteS and qteS.active then
+        local QTEHandler = require("game.QTEHandler")
+        local progress = 1 - (qteS.timer / QTEHandler.getWindow())  -- 0→1
+        local ringR = btBtn.r * (1 - progress * 0.55)  -- 从按钮半径收缩
+        local alpha = 0.9 * (1 - progress * 0.3)
+        -- 外环：金色收缩
+        nvgBeginPath(vg_)
+        nvgCircle(vg_, btBtn.x, btBtn.y, ringR)
+        nvgStrokeColor(vg_, nvgRGBAf(1.0, 0.85, 0.2, alpha))
+        nvgStrokeWidth(vg_, 3.5 - progress * 1.5)
+        nvgStroke(vg_)
+        -- 内环闪烁
+        local flash = 0.4 + math.abs(math.sin(progress * math.pi * 5)) * 0.5
+        nvgBeginPath(vg_)
+        nvgCircle(vg_, btBtn.x, btBtn.y, ringR * 0.65)
+        nvgStrokeColor(vg_, nvgRGBAf(1.0, 0.95, 0.5, flash * alpha))
+        nvgStrokeWidth(vg_, 1.5)
+        nvgStroke(vg_)
+    end
+
     -- SWITCH（角色切换）按钮（右下，原 FIRE 位置）
     if Player.isChenxiUnlocked() then
         local activeChr = Player.getActiveCharacter()
