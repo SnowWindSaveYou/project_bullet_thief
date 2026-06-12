@@ -418,10 +418,10 @@ function M.draw(vg)
         nvgFill(vg)
     end
 
-    -- 子弹时间光晕（颜色分角色）
+    -- 子弹时间光晕（大小跟随 stealRadius，与夺取范围视觉一致）
     if p.bulletTimeActive then
         local pulse = math.abs(math.sin(p.btPulse))
-        local glowR = p.radius + 10 + pulse * 8
+        local glowR = p.stealRadius + pulse * 6
         local gr, gg, gb  -- 光晕颜色
         if activeCharacter_ == CHARACTER_CHENXI then
             gr, gg, gb = 1.0, 0.75, 0.2  -- 金色
@@ -430,12 +430,12 @@ function M.draw(vg)
         end
         nvgBeginPath(vg)
         nvgCircle(vg, p.x, p.y, glowR)
-        nvgFillColor(vg, nvgRGBAf(gr, gg, gb, 0.15 + pulse * 0.1))
+        nvgFillColor(vg, nvgRGBAf(gr, gg, gb, 0.12 + pulse * 0.08))
         nvgFill(vg)
         nvgBeginPath(vg)
         nvgCircle(vg, p.x, p.y, glowR)
         nvgStrokeColor(vg, nvgRGBAf(gr, gg, gb, 0.5 + pulse * 0.3))
-        nvgStrokeWidth(vg, 1.5)
+        nvgStrokeWidth(vg, 2.0)
         nvgStroke(vg)
     end
 
