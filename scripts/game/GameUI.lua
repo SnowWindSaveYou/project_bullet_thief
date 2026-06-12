@@ -491,7 +491,7 @@ end
 -- ══════════════════════════════════════════════════════════════
 function drawButtons(p)
     local InputH = require("game.InputHandler")
-    local btBtn, fireBtn = InputH.getButtonRects()
+    local btBtn, fireBtn, switchBtn = InputH.getButtonRects()
 
     -- BT（闪避/子弹时间）按钮（左下）
     local btActive = InputH.isBulletTimeHeld()
@@ -511,53 +511,44 @@ function drawButtons(p)
         disabled  = btDisabled,
     })
 
-    -- FIRE（攻击）按钮（右下）
-    local fireActive = InputH.isFireHeld()
+    -- FIRE 按钮已移除（自动射击）
     local BulletMgr = require("game.BulletManager")
-    local orbitCount = #(BulletMgr.getOrbitBullets())
-    local fireDisabled = (orbitCount <= 0)  -- 没子弹时变透明
-    Comp.drawCircleButton(vg_, fireBtn.x, fireBtn.y, fireBtn.r, "FIRE", {
-        active    = fireActive,
-        fillRatio = (orbitCount > 0) and 1.0 or 0.0,
-        arcColor  = Theme.colors.accentYellow,
-        icon      = iconAttack_,
-        disabled  = fireDisabled,
-    })
 
-    -- QTE 音游缩圈（在 FIRE 按钮上）
-    local qte = BulletMgr.getQTEState()
-    if qte.active then
-        local QTE_WINDOW = 1.5  -- 需要和 BulletManager 中 QTE_CFG.window 一致
-        local progress = 1.0 - (qte.timer / QTE_WINDOW)  -- 0→1
-        -- 从按钮外围 2.5 倍收缩到按钮边缘
-        local maxR = fireBtn.r * 2.5
-        local minR = fireBtn.r + 2
-        local ringR = maxR - (maxR - minR) * progress
-
-        -- 透明度：淡入 + 最后闪烁
-        local ringAlpha
-        if progress < 0.08 then
-            ringAlpha = progress / 0.08
-        elseif qte.timer < 0.4 then
-            ringAlpha = 0.6 + 0.4 * math.abs(math.sin(qte.timer * 16))
-        else
-            ringAlpha = 0.9
-        end
-
-        -- 缩圈
+    -- QTE 收缩环（BT 按钮上的倒计时视觉提示）
+    local qteS = BulletMgr.getQTEState()
+    if qteS and qteS.active then
+        local QTEHandler = require("game.QTEHandler")
+        local progress = 1 - (qteS.timer / QTEHandler.getWindow())  -- 0→1
+        local ringR = btBtn.r * (1 - progress * 0.55)  -- 从按钮半径收缩
+        local alpha = 0.9 * (1 - progress * 0.3)
+        -- 外环：金色收缩
         nvgBeginPath(vg_)
-        nvgCircle(vg_, fireBtn.x, fireBtn.y, ringR)
-        nvgStrokeColor(vg_, nvgRGBAf(1.0, 0.95, 0.3, ringAlpha))
-        nvgStrokeWidth(vg_, 4.0)
+        nvgCircle(vg_, btBtn.x, btBtn.y, ringR)
+        nvgStrokeColor(vg_, nvgRGBAf(1.0, 0.85, 0.2, alpha))
+        nvgStrokeWidth(vg_, 3.5 - progress * 1.5)
         nvgStroke(vg_)
-
-        -- 内圈目标参照（按钮边缘）
+        -- 内环闪烁
+        local flash = 0.4 + math.abs(math.sin(progress * math.pi * 5)) * 0.5
         nvgBeginPath(vg_)
-        nvgCircle(vg_, fireBtn.x, fireBtn.y, minR)
-        nvgStrokeColor(vg_, nvgRGBAf(1.0, 1.0, 1.0, 0.3))
+        nvgCircle(vg_, btBtn.x, btBtn.y, ringR * 0.65)
+        nvgStrokeColor(vg_, nvgRGBAf(1.0, 0.95, 0.5, flash * alpha))
         nvgStrokeWidth(vg_, 1.5)
         nvgStroke(vg_)
     end
+
+    -- SWITCH（角色切换）按钮（右下，原 FIRE 位置）
+    if Player.isChenxiUnlocked() then
+        local activeChr = Player.getActiveCharacter()
+        local isChenxi = (activeChr == "chenxi")
+        local label = isChenxi and "星夜" or "晨曦"
+        local arcColor = isChenxi and Theme.colors.energyCyan or { 1.0, 0.75, 0.2, 1.0 }
+        Comp.drawCircleButton(vg_, switchBtn.x, switchBtn.y, switchBtn.r, label, {
+            active   = false,
+            arcColor = arcColor,
+            fillRatio = 1.0,
+        })
+    end
+
 end
 
 -- ══════════════════════════════════════════════════════════════

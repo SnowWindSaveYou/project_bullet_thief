@@ -1,0 +1,33 @@
+{
+  "$schema": "../schemas/project.schema.json",
+  "project_id": "p_uoo1",
+  "author": {
+    "id": "1020406833"
+  },
+  "entry": "main.lua",
+  "version": "1.0.1",
+  "taptap_publish": {
+    "title": "BulletThief",
+    "description": "夺取敌人子弹，以其人之道还治其人之身的弹幕动作游戏",
+    "category": "action",
+    "screen_orientation": "landscape",
+    "collection_type": "sce",
+    "trial_note": "<developer's note>",
+    "app_platforms": "1,2",
+    "developer_id": 394873,
+    "app_id": 865208,
+    "miniapp_id": "tapmcylfrcbpurr304"
+  },
+  "assets": {
+    "icon": "",
+    "screenshots": [],
+    "promotional_image": ""
+  },
+  "test_qrcode": {
+    "url": "https://tapcode-sce.spark.xd.com/qrcode/p_uoo1_1780237711257.png",
+    "generated_at": "2026-05-31T14:28:31.408Z"
+  },
+  "metadata": {
+    "updated_at": "2026-05-31T14:28:31.408Z"
+  }
+}

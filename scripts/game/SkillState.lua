@@ -30,6 +30,21 @@ M.QTE_FORMS = {
     [4] = { id = "homing",  name = "群星" },
 }
 
+-- ═══ 晨曦形态名称定义 ═══
+
+M.CX_SLASH_FORMS = {
+    [1] = { id = "endless",  name = "无尽斩刑" },
+    [2] = { id = "arcblade", name = "断空弧刃" },
+    [3] = { id = "burnpath", name = "灼痕行路" },
+    [4] = { id = "gravity",  name = "万有引斩" },
+}
+
+M.CX_FINISHER_FORMS = {
+    [1] = { id = "verdict",  name = "终幕·裁决" },
+    [2] = { id = "thousand", name = "终幕·千刃" },
+    [3] = { id = "flash",    name = "终幕·一闪" },
+}
+
 -- ═══ 等级上限 ═══
 
 M.MAX_LEVELS = {
@@ -39,12 +54,18 @@ M.MAX_LEVELS = {
     steal = 3,
     mine  = 5,
     link  = 5,
+    -- 晨曦
+    cx_slash    = 4,
+    cx_finisher = 4,
 }
 
 M.MAX_FORMS = {
     shot  = 5,
     orbit = 5,
     qte   = 4,
+    -- 晨曦
+    cx_slash    = 4,
+    cx_finisher = 3,
 }
 
 -- ═══ 状态数据 ═══
@@ -64,7 +85,7 @@ end
 
 function M.reset()
     state = {
-        -- A线三轴
+        -- A线三轴（星夜）
         shot  = { form = 1, level = 1 },
         orbit = { form = 1, level = 1 },
         qte   = { form = 1, level = 1 },
@@ -74,6 +95,9 @@ function M.reset()
         mine  = { level = 0 },
         -- D线
         link  = { level = 0 },
+        -- 晨曦两轴
+        cx_slash    = { form = 1, level = 1 },
+        cx_finisher = { form = 1, level = 1 },
     }
 end
 
@@ -157,7 +181,7 @@ end
 -- ═══ 查询接口 ═══
 
 --- 获取形态显示名称
----@param axis "shot"|"orbit"|"qte"
+---@param axis string
 ---@param form integer|nil 不传则取当前
 ---@return string
 function M.getFormName(axis, form)
@@ -166,6 +190,8 @@ function M.getFormName(axis, form)
     if axis == "shot" then tbl = M.SHOT_FORMS
     elseif axis == "orbit" then tbl = M.ORBIT_FORMS
     elseif axis == "qte" then tbl = M.QTE_FORMS
+    elseif axis == "cx_slash" then tbl = M.CX_SLASH_FORMS
+    elseif axis == "cx_finisher" then tbl = M.CX_FINISHER_FORMS
     end
     if tbl and tbl[form] then
         return tbl[form].name
@@ -174,7 +200,7 @@ function M.getFormName(axis, form)
 end
 
 --- 获取形态ID字符串
----@param axis "shot"|"orbit"|"qte"
+---@param axis string
 ---@return string
 function M.getFormId(axis)
     local form = M.getForm(axis)
@@ -182,6 +208,8 @@ function M.getFormId(axis)
     if axis == "shot" then tbl = M.SHOT_FORMS
     elseif axis == "orbit" then tbl = M.ORBIT_FORMS
     elseif axis == "qte" then tbl = M.QTE_FORMS
+    elseif axis == "cx_slash" then tbl = M.CX_SLASH_FORMS
+    elseif axis == "cx_finisher" then tbl = M.CX_FINISHER_FORMS
     end
     if tbl and tbl[form] then
         return tbl[form].id

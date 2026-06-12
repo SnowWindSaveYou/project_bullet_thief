@@ -1,0 +1,139 @@
+{
+  "base": {
+    "radius": 18,
+    "grazeRadius": 42,
+    "speed": 280,
+    "maxHp": 100,
+    "energy": {
+      "max": 1.0,
+      "regenRate": 0,
+      "btCostRate": 0.18,
+      "minToStart": 0.15,
+      "cooldown": 0
+    },
+    "slash": {
+      "baseDamage": 3,
+      "nonBtDamage": 1,
+      "cooldownPerEnemy": 0.5,
+      "btCooldownPerEnemy": 0.8,
+      "arcDeg": 60,
+      "range": 32,
+      "knockback": 12
+    },
+    "enhancedSlash": {
+      "segments": {
+        "full":    { "threshold": 0.6, "mult": 3.0, "cost": 0.08 },
+        "normal":  { "threshold": 0.3, "mult": 2.0, "cost": 0.05 },
+        "decay":   { "threshold": 0.0, "mult": 1.3, "cost": 0.02 }
+      },
+      "arcDeg": 90,
+      "range": 42,
+      "knockback": 22
+    },
+    "chargeConvert": {
+      "autoOnSwitch": 4,
+      "manualInterval": 0.2,
+      "autoChargeSpeedMult": 0.5,
+      "chargeRetryInterval": 0.1,
+      "energyPerBullet": 0.08
+    },
+    "burnPath": {
+      "minDist": 8
+    },
+    "clearBullet": {
+      "energyPerClear": 0.02
+    },
+    "finisher": {
+      "maxSlashCount": 30
+    }
+  },
+
+  "skills": {
+    "cx_slash": {
+      "endless": {
+        "id": "endless",
+        "baseMult": 1.2,
+        "comboMaxHits": 5,
+        "comboMaxMult": 1.8,
+        "comboBreakTime": 1.0,
+        "levelBonus": {
+          "2": { "comboBreakTime": 2.5, "comboMaxMult": 2.2 },
+          "3": { "comboBreakTime": 2.5, "comboMaxMult": 2.2, "noReset": true, "switchKeep": 2.0 },
+          "4": { "comboBreakTime": 2.5, "comboMaxMult": 2.2, "noReset": true, "switchKeep": 2.0, "armorBreak": 0.25, "armorDuration": 4.0 }
+        }
+      },
+      "arcblade": {
+        "id": "arcblade",
+        "baseMult": 1.0,
+        "projRange": 2.0,
+        "projWidth": 12,
+        "projDmgMult": 0.6,
+        "projPierce": 0,
+        "levelBonus": {
+          "2": { "projRange": 4.0, "projWidth": 18, "projPierce": 1 },
+          "3": { "projRange": 4.0, "projWidth": 18, "projPierce": 1, "dualProj": true, "dualSpreadDeg": 15 },
+          "4": { "projRange": 4.0, "projWidth": 18, "projPierce": 999, "dualProj": true, "dualSpreadDeg": 15, "slowOnHit": 0.3, "slowDuration": 1.5 }
+        }
+      },
+      "burnpath": {
+        "id": "burnpath",
+        "baseMult": 0.8,
+        "pathWidth": 20,
+        "pathDurationAfterBT": 3.0,
+        "pathDPS": 2,
+        "levelBonus": {
+          "2": { "pathWidth": 32, "pathDurationAfterBT": 4.5, "pathDPS": 3 },
+          "3": { "pathWidth": 32, "pathDurationAfterBT": 4.5, "pathDPS": 3, "slowFactor": 0.35, "dmgBoost": 0.30 },
+          "4": { "pathWidth": 32, "pathDurationAfterBT": 7.0, "pathDPS": 3, "slowFactor": 0.35, "dmgBoost": 0.30, "crossExplodeRadius": 40, "crossExplodeMult": 3.0 }
+        }
+      },
+      "gravity": {
+        "id": "gravity",
+        "baseMult": 0.85,
+        "pullRadius": 1.5,
+        "pullStrength": 80,
+        "levelBonus": {
+          "2": { "pullRadius": 3.0, "pullStrength": 120, "collisionDmgMult": 0.2 },
+          "3": { "pullRadius": 3.0, "pullStrength": 120, "collisionDmgMult": 0.2, "rootDuration": 0.4, "rootExplodeRadius": 30, "rootExplodeMult": 0.5 },
+          "4": { "pullRadius": 5.0, "pullStrength": 160, "collisionDmgMult": 0.2, "rootDuration": 0.4, "rootExplodeRadius": 30, "rootExplodeMult": 0.5, "singularityThreshold": 4, "singularityDmgMult": 2.0 }
+        }
+      }
+    },
+
+    "cx_finisher": {
+      "verdict": {
+        "id": "verdict",
+        "baseRadius": 1.5,
+        "radiusPerCount": 0.05,
+        "dmgPerCount": 0.06,
+        "levelBonus": {
+          "2": { "radiusScale": 1.4, "knockback": 1.5 },
+          "3": { "radiusScale": 1.4, "knockback": 1.5, "lingerDuration": 3.0, "lingerDmgRatio": 0.15 },
+          "4": { "radiusScale": 1.4, "knockback": 1.5, "lingerDuration": 3.0, "lingerDmgRatio": 0.15, "secondBlast": true, "secondDelay": 0.8, "secondDmgMult": 0.7, "secondRadiusMult": 1.2 }
+        }
+      },
+      "thousand": {
+        "id": "thousand",
+        "dmgPerBlade": 0.4,
+        "levelBonus": {
+          "2": { "stackBonus": 0.08 },
+          "3": { "stackBonus": 0.08, "explodeOnHit": true, "explodeRadius": 0.5, "explodeMult": 0.3, "priorityLowHP": true },
+          "4": { "stackBonus": 0.08, "explodeOnHit": true, "explodeRadius": 0.5, "explodeMult": 0.3, "priorityLowHP": true, "finalBlade": true, "finalBladeMult": 0.4, "finalBladeCountThreshold": 15 }
+        }
+      },
+      "flash": {
+        "id": "flash",
+        "baseWidth": 1.0,
+        "widthPerCount": 0.03,
+        "baseRange": 3.0,
+        "rangePerCount": 0.1,
+        "dmgPerCount": 0.05,
+        "levelBonus": {
+          "2": { "rangeScale": 1.5, "slowOnHit": 0.4, "slowDuration": 2.0 },
+          "3": { "rangeScale": 1.5, "slowOnHit": 0.4, "slowDuration": 2.0, "tripleWave": true, "sideSpreadDeg": 15, "sideDmgMult": 0.7 },
+          "4": { "rangeScale": 1.5, "slowOnHit": 0.4, "slowDuration": 2.0, "tripleWave": true, "sideSpreadDeg": 15, "sideDmgMult": 0.7, "endSlash": true, "endSlashWidthRatio": 0.6, "endSlashDmgMult": 0.5 }
+        }
+      }
+    }
+  }
+}
